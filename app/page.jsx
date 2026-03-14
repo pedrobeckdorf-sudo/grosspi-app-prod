@@ -192,7 +192,7 @@ function lsSet(key, val) {
 const DB = { players: "grosspi/players", rounds: "grosspi/rounds", hcp2026: "grosspi/hcp2026" };
 const LS = { role: "grosspi:role" };
 
-const ADMIN_PIN = "Sbv1240";
+const ADMIN_PIN = "grosspi2026";
 
 // ======== LOGIN SCREEN ========
 function LoginScreen({ onLogin }) {
@@ -510,8 +510,8 @@ export default function App() {
       {/* Main */}
       <main style={S.main}>
         {view==="dashboard" && <Dashboard rankings={rankings} rounds={yearRounds} nav={nav} annual={year===2025?INIT_DATA.annual2025:null} players={players} year={year} hcp2026={hcp2026} isAdmin={isAdmin} />}
-        {view==="rounds" && <Rounds rounds={yearRounds} players={players} nav={nav} year={year} hcp2026={hcp2026} />}
-        {view==="round-detail" && <RoundDetail rid={selRound} rounds={rounds} players={players} nav={nav} year={year} hcp2026={hcp2026} allYearRounds={yearRounds} />}
+        {view==="rounds" && <Rounds rounds={yearRounds} players={players} nav={nav} year={year} hcp2026={hcp2026} isAdmin={isAdmin} saveRounds={saveRounds} allRounds={rounds} />}
+        {view==="round-detail" && <RoundDetail rid={selRound} rounds={rounds} players={players} nav={nav} year={year} hcp2026={hcp2026} allYearRounds={yearRounds} isAdmin={isAdmin} saveRounds={saveRounds} allRounds={rounds} />}
         {view==="players" && <Players rankings={rankings} nav={nav} year={year} hcp2026={hcp2026} />}
         {view==="player-detail" && <PlayerDetail pid={selPlayer} rankings={rankings} rounds={yearRounds} nav={nav} year={year} hcp2026={hcp2026} players={players} />}
         {view==="compare" && <Compare rankings={rankings} cmpIds={cmpIds} setCmpIds={setCmpIds} rounds={yearRounds} />}
@@ -609,7 +609,7 @@ function Dashboard({rankings, rounds, nav, annual, players, year, hcp2026, isAdm
 }
 
 // ======== ROUNDS ========
-function Rounds({rounds, players, nav, year, hcp2026}) {
+function Rounds({rounds, players, nav, year, hcp2026, isAdmin, saveRounds, allRounds}) {
   const sorted = [...rounds].sort((a,b) => {
     const ia = parseInt(a.id.replace("r",""));
     const ib = parseInt(b.id.replace("r",""));
@@ -624,6 +624,14 @@ function Rounds({rounds, players, nav, year, hcp2026}) {
     const p = players.find(x=>x.id===pid);
     return p?.handicap || 18;
   };
+
+  const handleDelete = (e, rid) => {
+    e.stopPropagation();
+    const r = rounds.find(x => x.id === rid);
+    if (!confirm(`¿Eliminar la ronda "${r?.name}"? Esta acción no se puede deshacer.`)) return;
+    saveRounds(allRounds.filter(x => x.id !== rid));
+  };
+
   return (
     <div style={S.view}>
       <div style={S.hdr}><h1 style={S.title}>Rondas {year}</h1></div>
@@ -641,13 +649,23 @@ function Rounds({rounds, players, nav, year, hcp2026}) {
           });
         }
         return (
-          <div key={r.id} style={S.roundCard} onClick={()=>nav("round-detail",{rid:r.id})}>
+          <div key={r.id} style={{...S.roundCard, alignItems:"center"}} onClick={()=>nav("round-detail",{rid:r.id})}>
             <div style={{flex:1}}>
               <div style={{fontWeight:700,fontSize:15,color:"#1a472a"}}>{r.name}</div>
               <div style={{fontSize:12,color:"#6b7280",marginTop:2}}>{r.date ? new Date(r.date).toLocaleDateString("es-CL",{weekday:"long",day:"numeric",month:"long"}) : ""}</div>
               <div style={{fontSize:12,color:"#9ca3af",marginTop:4}}>{n} jugadores{topName ? ` · 🏆 ${topName} (${topPts} pts neto)`:""}</div>
             </div>
-            <div style={{fontSize:20,color:"#d1d5db"}}>→</div>
+            <div style={{display:"flex",alignItems:"center",gap:8}}>
+              {isAdmin && (
+                <button
+                  onClick={(e) => handleDelete(e, r.id)}
+                  style={{padding:"5px 10px",borderRadius:6,border:"1px solid #fca5a5",backgroundColor:"#fef2f2",color:"#dc2626",fontSize:13,cursor:"pointer",fontWeight:600,flexShrink:0}}
+                >
+                  🗑️
+                </button>
+              )}
+              <div style={{fontSize:20,color:"#d1d5db"}}>→</div>
+            </div>
           </div>
         );
       })}
@@ -656,9 +674,35 @@ function Rounds({rounds, players, nav, year, hcp2026}) {
 }
 
 // ======== ROUND DETAIL ========
-function RoundDetail({rid, rounds, players, nav, year, hcp2026, allYearRounds}) {
+function RoundDetail({rid, rounds, players, nav, year, hcp2026, allYearRounds, isAdmin, saveRounds, allRounds}) {
   const round = rounds.find(r=>r.id===rid);
   if (!round) return <div style={S.empty}>Ronda no encontrada</div>;
+
+  const [editing, setEditing] = useState(false);
+  const [editName, setEditName] = useState(round.name || "");
+  const [editDate, setEditDate] = useState(round.date || "");
+
+  const handleSaveEdit = () => {
+    const updated = allRounds.map(r => r.id === rid ? {...r, name: editName, date: editDate} : r);
+    saveRounds(updated);
+    setEditing(false);
+  };
+
+  const handleDeleteRound = () => {
+    if (!confirm(`¿Eliminar la ronda "${round.name}" completa? Esta acción no se puede deshacer.`)) return;
+    saveRounds(allRounds.filter(r => r.id !== rid));
+    nav("rounds");
+  };
+
+  const handleDeletePlayer = (pid) => {
+    const p = players.find(x => x.id === pid);
+    if (!confirm(`¿Eliminar el score de ${p?.name} de esta ronda?`)) return;
+    const newScores = {...round.scores};
+    delete newScores[pid];
+    const newPhotos = (round.photos || []).filter(ph => ph.player !== pid);
+    const updated = allRounds.map(r => r.id === rid ? {...r, scores: newScores, photos: newPhotos} : r);
+    saveRounds(updated);
+  };
 
   const board = useMemo(() => {
     if (!round.scores) return [];
@@ -685,10 +729,48 @@ function RoundDetail({rid, rounds, players, nav, year, hcp2026, allYearRounds}) 
   return (
     <div style={S.view}>
       <button style={S.back} onClick={()=>nav("rounds")}>← Rondas</button>
-      <div style={S.hdr}>
-        <h1 style={S.title}>{round.name}</h1>
-        <p style={S.sub}>{round.date ? new Date(round.date).toLocaleDateString("es-CL",{weekday:"long",day:"numeric",month:"long",year:"numeric"}) : ""}</p>
-      </div>
+
+      {/* Header with edit/delete for admin */}
+      {editing ? (
+        <div style={{...S.card, marginBottom:20}}>
+          <h2 style={{...S.cardTitle, marginBottom:12}}>✏️ Editar Ronda</h2>
+          <div style={{display:"flex",gap:12,flexWrap:"wrap",marginBottom:12}}>
+            <div style={{flex:1,minWidth:180}}>
+              <label style={S.label}>Nombre</label>
+              <input style={S.input} value={editName} onChange={e=>setEditName(e.target.value)} />
+            </div>
+            <div style={{flex:1,minWidth:150}}>
+              <label style={S.label}>Fecha</label>
+              <input style={S.input} type="date" value={editDate} onChange={e=>setEditDate(e.target.value)} />
+            </div>
+          </div>
+          <div style={{display:"flex",gap:8}}>
+            <button style={{...S.btn,...S.btnP}} onClick={handleSaveEdit}>Guardar</button>
+            <button style={{...S.btn,...S.btnS}} onClick={()=>setEditing(false)}>Cancelar</button>
+          </div>
+        </div>
+      ) : (
+        <div style={S.hdr}>
+          <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:12,flexWrap:"wrap"}}>
+            <div>
+              <h1 style={S.title}>{round.name}</h1>
+              <p style={S.sub}>{round.date ? new Date(round.date).toLocaleDateString("es-CL",{weekday:"long",day:"numeric",month:"long",year:"numeric"}) : ""}</p>
+            </div>
+            {isAdmin && (
+              <div style={{display:"flex",gap:8,flexShrink:0}}>
+                <button
+                  onClick={() => { setEditName(round.name); setEditDate(round.date||""); setEditing(true); }}
+                  style={{...S.btn,...S.btnS,fontSize:13,padding:"8px 14px"}}
+                >✏️ Editar</button>
+                <button
+                  onClick={handleDeleteRound}
+                  style={{padding:"8px 14px",borderRadius:8,border:"1px solid #fca5a5",backgroundColor:"#fef2f2",color:"#dc2626",fontWeight:600,fontSize:13,cursor:"pointer"}}
+                >🗑️ Eliminar ronda</button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Leaderboard */}
       <div style={S.card}>
@@ -696,6 +778,7 @@ function RoundDetail({rid, rounds, players, nav, year, hcp2026, allYearRounds}) 
         <div style={S.tblWrap}><table style={S.tbl}><thead><tr>
           <th style={S.th}>#</th><th style={{...S.th,textAlign:"left"}}>Jugador</th><th style={S.th}>HCP</th><th style={S.th}>Golpes</th>
           <th style={{...S.th,color:"#4a6741"}}>Pts Neto</th><th style={S.th}>Pts Gross</th>
+          {isAdmin && <th style={S.th}></th>}
         </tr></thead><tbody>
           {board.map((e,i) => (
             <tr key={e.player.id} style={S.tr}>
@@ -707,6 +790,14 @@ function RoundDetail({rid, rounds, players, nav, year, hcp2026, allYearRounds}) 
               <td style={S.td}>{e.totalStrokes}</td>
               <td style={{...S.td,fontWeight:800,color:"#1a472a",fontSize:16}}>{e.netPts}</td>
               <td style={S.td}>{e.grossPts}</td>
+              {isAdmin && (
+                <td style={S.td}>
+                  <button
+                    onClick={() => handleDeletePlayer(e.player.id)}
+                    style={{padding:"3px 8px",borderRadius:5,border:"1px solid #fca5a5",backgroundColor:"#fef2f2",color:"#dc2626",fontSize:11,cursor:"pointer",fontWeight:600}}
+                  >✕</button>
+                </td>
+              )}
             </tr>
           ))}
         </tbody></table></div>
