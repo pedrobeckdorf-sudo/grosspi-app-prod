@@ -119,24 +119,80 @@ function scoreLabel(strokes, par) {
   return "+" + d;
 }
 
-// Storage helpers (localStorage for web deployment)
-async function loadStorage(key, fallback) {
+// ======== FIREBASE REALTIME DATABASE ========
+const FIREBASE_CONFIG = {
+  apiKey: "AIzaSyBIp-mGYOb9w7gLNeSOttngtXQIJvjrfLI",
+  authDomain: "grosspi.firebaseapp.com",
+  databaseURL: "https://grosspi-default-rtdb.firebaseio.com",
+  projectId: "grosspi",
+  storageBucket: "grosspi.firebasestorage.app",
+  messagingSenderId: "699405139472",
+  appId: "1:699405139472:web:cbe25f92e1bf4c70961495",
+};
+
+// Lazy Firebase initializer — runs only in browser
+let _db = null;
+async function getDB() {
+  if (_db) return _db;
+  if (typeof window === "undefined") return null;
+  const { initializeApp, getApps } = await import("firebase/app");
+  const { getDatabase } = await import("firebase/database");
+  const app = getApps().length ? getApps()[0] : initializeApp(FIREBASE_CONFIG);
+  _db = getDatabase(app);
+  return _db;
+}
+
+async function fbGet(path, fallback = null) {
   try {
-    if (typeof window === 'undefined') return fallback;
+    const db = await getDB();
+    if (!db) return fallback;
+    const { ref, get } = await import("firebase/database");
+    const snap = await get(ref(db, path));
+    return snap.exists() ? snap.val() : fallback;
+  } catch (e) { console.error("fbGet:", e); return fallback; }
+}
+
+async function fbSet(path, value) {
+  try {
+    const db = await getDB();
+    if (!db) return;
+    const { ref, set } = await import("firebase/database");
+    await set(ref(db, path), value);
+  } catch (e) { console.error("fbSet:", e); }
+}
+
+async function fbSubscribe(path, callback) {
+  try {
+    const db = await getDB();
+    if (!db) return () => {};
+    const { ref, onValue } = await import("firebase/database");
+    const unsubscribe = onValue(ref(db, path), (snap) => {
+      callback(snap.exists() ? snap.val() : null);
+    });
+    return unsubscribe;
+  } catch (e) { console.error("fbSubscribe:", e); return () => {}; }
+}
+
+// localStorage — only for role (session-local, per device)
+function lsGet(key, fallback = null) {
+  try {
+    if (typeof window === "undefined") return fallback;
     const v = localStorage.getItem(key);
     return v ? JSON.parse(v) : fallback;
   } catch { return fallback; }
 }
-async function saveStorage(key, val) {
+function lsSet(key, val) {
   try {
-    if (typeof window === 'undefined') return;
+    if (typeof window === "undefined") return;
     localStorage.setItem(key, JSON.stringify(val));
-  } catch(e) { console.error(e); }
+  } catch (e) { console.error(e); }
 }
 
-const SK = { players: "grosspi:players", rounds: "grosspi:rounds", hcp2026: "grosspi:hcp2026", role: "grosspi:role" };
+// DB paths
+const DB = { players: "grosspi/players", rounds: "grosspi/rounds", hcp2026: "grosspi/hcp2026" };
+const LS = { role: "grosspi:role" };
 
-const ADMIN_PIN = "Sbv1240";
+const ADMIN_PIN = "grosspi2026";
 
 // ======== LOGIN SCREEN ========
 function LoginScreen({ onLogin }) {
@@ -287,35 +343,52 @@ export default function App() {
 
   const isAdmin = role === "admin";
 
-  const handleLogin = async (r) => {
+  const handleLogin = (r) => {
     setRole(r);
-    await saveStorage(SK.role, r);
+    lsSet(LS.role, r);
   };
-  const handleLogout = async () => {
+  const handleLogout = () => {
     setRole(null);
-    await saveStorage(SK.role, null);
+    lsSet(LS.role, null);
     setView("dashboard");
   };
 
   useEffect(() => {
+    // Role from localStorage (device-local)
+    const savedRole = lsGet(LS.role, null);
+    if (savedRole) setRole(savedRole);
+
+    // Subscribe to Firebase realtime updates
+    let unsubPlayers, unsubRounds, unsubHcp;
+    let firstPlayers = true, firstRounds = true, firstHcp = true;
+
     (async () => {
-      const [p, r, h, savedRole] = await Promise.all([
-        loadStorage(SK.players, null),
-        loadStorage(SK.rounds, null),
-        loadStorage(SK.hcp2026, null),
-        loadStorage(SK.role, null),
-      ]);
-      if (p) setPlayers(p);
-      if (r) setRounds(r);
-      if (h) setHcp2026(h);
-      if (savedRole) setRole(savedRole);
-      setLoaded(true);
+      unsubPlayers = await fbSubscribe(DB.players, (val) => {
+        if (val) setPlayers(val);
+        if (firstPlayers) firstPlayers = false;
+      });
+      unsubRounds = await fbSubscribe(DB.rounds, (val) => {
+        if (val) setRounds(val);
+        if (firstRounds) firstRounds = false;
+      });
+      unsubHcp = await fbSubscribe(DB.hcp2026, (val) => {
+        if (val) setHcp2026(val);
+        if (firstHcp) firstHcp = false;
+      });
+      // Small delay to let Firebase respond before showing UI
+      setTimeout(() => setLoaded(true), 800);
     })();
+
+    return () => {
+      if (unsubPlayers) unsubPlayers();
+      if (unsubRounds) unsubRounds();
+      if (unsubHcp) unsubHcp();
+    };
   }, []);
 
-  const savePlayers = useCallback(async (p) => { setPlayers(p); await saveStorage(SK.players, p); }, []);
-  const saveRounds = useCallback(async (r) => { setRounds(r); await saveStorage(SK.rounds, r); }, []);
-  const saveHcp2026 = useCallback(async (h) => { setHcp2026(h); await saveStorage(SK.hcp2026, h); }, []);
+  const savePlayers = useCallback(async (p) => { setPlayers(p); await fbSet(DB.players, p); }, []);
+  const saveRounds = useCallback(async (r) => { setRounds(r); await fbSet(DB.rounds, r); }, []);
+  const saveHcp2026 = useCallback(async (h) => { setHcp2026(h); await fbSet(DB.hcp2026, h); }, []);
 
   const nav = (v, extra={}) => {
     if (extra.pid) setSelPlayer(extra.pid);
@@ -654,7 +727,80 @@ function RoundDetail({rid, rounds, players, nav, year, hcp2026, allYearRounds}) 
           </tbody></table></div>
         </div>
       )}
+
+      {/* Photo Gallery */}
+      <PhotoGallery photos={round.photos || []} players={players} />
     </div>
+  );
+}
+
+// ======== PHOTO GALLERY ========
+function PhotoGallery({ photos, players }) {
+  const [lightbox, setLightbox] = useState(null); // { src, name }
+
+  if (!photos || photos.length === 0) return (
+    <div style={S.card}>
+      <h2 style={S.cardTitle}>📷 Fotos de Respaldo</h2>
+      <div style={{textAlign:"center",padding:"24px 0",color:"#9ca3af",fontSize:13}}>
+        No hay fotos cargadas para esta ronda
+      </div>
+    </div>
+  );
+
+  return (
+    <>
+      <div style={S.card}>
+        <h2 style={S.cardTitle}>📷 Fotos de Respaldo ({photos.length})</h2>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(150px,1fr))",gap:10,marginTop:4}}>
+          {photos.map((ph, i) => {
+            const playerName = players.find(p => p.id === ph.player)?.name || ph.player;
+            return (
+              <div
+                key={i}
+                style={{cursor:"pointer",borderRadius:8,overflow:"hidden",border:"1px solid #e5e7eb",transition:"transform 0.15s, box-shadow 0.15s"}}
+                onClick={() => setLightbox({ src: ph.src, name: playerName })}
+                onMouseEnter={e => { e.currentTarget.style.transform="scale(1.02)"; e.currentTarget.style.boxShadow="0 4px 12px rgba(0,0,0,0.12)"; }}
+                onMouseLeave={e => { e.currentTarget.style.transform="scale(1)"; e.currentTarget.style.boxShadow="none"; }}
+              >
+                <img
+                  src={ph.src}
+                  alt={`Tarjeta ${playerName}`}
+                  style={{width:"100%",height:130,objectFit:"cover",display:"block"}}
+                />
+                <div style={{padding:"6px 8px",backgroundColor:"#f9fafb",fontSize:11,fontWeight:600,color:"#374151",textOverflow:"ellipsis",overflow:"hidden",whiteSpace:"nowrap"}}>
+                  {playerName}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Lightbox */}
+      {lightbox && (
+        <div
+          style={{position:"fixed",inset:0,backgroundColor:"rgba(0,0,0,0.88)",zIndex:2000,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:20}}
+          onClick={() => setLightbox(null)}
+        >
+          <div style={{position:"relative",maxWidth:"90vw",maxHeight:"90vh"}} onClick={e => e.stopPropagation()}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+              <span style={{color:"#fff",fontWeight:600,fontSize:14}}>📷 {lightbox.name}</span>
+              <button
+                onClick={() => setLightbox(null)}
+                style={{background:"rgba(255,255,255,0.15)",border:"none",color:"#fff",borderRadius:6,padding:"4px 12px",cursor:"pointer",fontSize:16,fontWeight:700}}
+              >
+                ✕
+              </button>
+            </div>
+            <img
+              src={lightbox.src}
+              alt={lightbox.name}
+              style={{maxWidth:"90vw",maxHeight:"80vh",objectFit:"contain",borderRadius:10,display:"block"}}
+            />
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 
