@@ -134,7 +134,80 @@ async function saveStorage(key, val) {
   } catch(e) { console.error(e); }
 }
 
-const SK = { players: "grosspi:players", rounds: "grosspi:rounds", hcp2026: "grosspi:hcp2026" };
+const SK = { players: "grosspi:players", rounds: "grosspi:rounds", hcp2026: "grosspi:hcp2026", role: "grosspi:role" };
+
+const ADMIN_PIN = "grosspi2026";
+
+// ======== LOGIN SCREEN ========
+function LoginScreen({ onLogin }) {
+  const [mode, setMode] = useState(null); // null | "admin"
+  const [pin, setPin] = useState("");
+  const [error, setError] = useState("");
+
+  const handleAdmin = () => {
+    if (pin === ADMIN_PIN) {
+      onLogin("admin");
+    } else {
+      setError("PIN incorrecto");
+      setPin("");
+    }
+  };
+
+  return (
+    <div style={{
+      display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center",
+      minHeight:"100vh", backgroundColor:"#f5f7f3", fontFamily:"'DM Sans','Segoe UI',system-ui,sans-serif",
+      padding:24
+    }}>
+      <img src={LOGO_SRC} alt="Grosspi" style={{width:110,borderRadius:14,marginBottom:24,boxShadow:"0 4px 16px rgba(0,0,0,0.12)"}} />
+      <h1 style={{fontSize:22,fontWeight:800,color:"#1a472a",margin:"0 0 4px",letterSpacing:"-0.03em"}}>Copa Grosspi</h1>
+      <p style={{fontSize:13,color:"#6b7280",marginBottom:32}}>Las Lomas de La Dehesa</p>
+
+      {!mode ? (
+        <div style={{display:"flex",flexDirection:"column",gap:12,width:"100%",maxWidth:280}}>
+          <button
+            style={{padding:"14px 24px",borderRadius:10,border:"none",backgroundColor:"#1a472a",color:"#fff",fontWeight:700,fontSize:15,cursor:"pointer"}}
+            onClick={() => onLogin("player")}
+          >
+            ⛳ Entrar como Jugador
+          </button>
+          <button
+            style={{padding:"14px 24px",borderRadius:10,border:"1px solid #d1d5db",backgroundColor:"#fff",color:"#374151",fontWeight:600,fontSize:15,cursor:"pointer"}}
+            onClick={() => setMode("admin")}
+          >
+            🔐 Entrar como Admin
+          </button>
+        </div>
+      ) : (
+        <div style={{display:"flex",flexDirection:"column",gap:12,width:"100%",maxWidth:280}}>
+          <p style={{textAlign:"center",fontWeight:600,color:"#1a472a",margin:0}}>PIN de administrador</p>
+          <input
+            type="password"
+            placeholder="Ingresa el PIN..."
+            value={pin}
+            onChange={e => { setPin(e.target.value); setError(""); }}
+            onKeyDown={e => e.key === "Enter" && handleAdmin()}
+            autoFocus
+            style={{padding:"10px 14px",borderRadius:8,border:"1px solid #d1d5db",fontSize:14,outline:"none",textAlign:"center",letterSpacing:"0.2em"}}
+          />
+          {error && <p style={{color:"#ef4444",fontSize:12,textAlign:"center",margin:0}}>{error}</p>}
+          <button
+            style={{padding:"12px 24px",borderRadius:10,border:"none",backgroundColor:"#1a472a",color:"#fff",fontWeight:700,fontSize:14,cursor:"pointer"}}
+            onClick={handleAdmin}
+          >
+            Ingresar
+          </button>
+          <button
+            style={{padding:"8px",border:"none",backgroundColor:"transparent",color:"#6b7280",fontSize:13,cursor:"pointer"}}
+            onClick={() => { setMode(null); setPin(""); setError(""); }}
+          >
+            ← Volver
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
 
 // Helper: get year from a round
 function roundYear(r) {
@@ -210,17 +283,32 @@ export default function App() {
   const [loaded, setLoaded] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [year, setYear] = useState(2026);
+  const [role, setRole] = useState(null); // null = not logged in, "player" | "admin"
+
+  const isAdmin = role === "admin";
+
+  const handleLogin = async (r) => {
+    setRole(r);
+    await saveStorage(SK.role, r);
+  };
+  const handleLogout = async () => {
+    setRole(null);
+    await saveStorage(SK.role, null);
+    setView("dashboard");
+  };
 
   useEffect(() => {
     (async () => {
-      const [p, r, h] = await Promise.all([
+      const [p, r, h, savedRole] = await Promise.all([
         loadStorage(SK.players, null),
         loadStorage(SK.rounds, null),
         loadStorage(SK.hcp2026, null),
+        loadStorage(SK.role, null),
       ]);
       if (p) setPlayers(p);
       if (r) setRounds(r);
       if (h) setHcp2026(h);
+      if (savedRole) setRole(savedRole);
       setLoaded(true);
     })();
   }, []);
@@ -289,14 +377,16 @@ export default function App() {
     </div>
   );
 
+  if (!role) return <LoginScreen onLogin={handleLogin} />;
+
   const navItems = [
     {id:"dashboard",icon:"🏆",label:"Dashboard"},
     {id:"rounds",icon:"📅",label:"Rondas"},
     {id:"players",icon:"👥",label:"Jugadores"},
     {id:"compare",icon:"⚔️",label:"Comparar"},
-    {id:"manual",icon:"📝",label:"Cargar Ronda"},
+    ...(isAdmin ? [{id:"manual",icon:"📝",label:"Cargar Ronda"}] : []),
     {id:"reglamento",icon:"📜",label:"Reglamento"},
-    {id:"settings",icon:"⚙️",label:"Config"},
+    ...(isAdmin ? [{id:"settings",icon:"⚙️",label:"Config"}] : []),
   ];
 
   return (
@@ -330,27 +420,40 @@ export default function App() {
         <div style={S.sideFooter}>
           <div style={S.footLabel}>{players.length} jugadores · {yearRounds.length} rondas ({year})</div>
           <div style={S.footLabel}>Las Lomas de La Dehesa</div>
+          <div style={{marginTop:8,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+            <span style={{fontSize:11,fontWeight:700,color:isAdmin?"#f59e0b":"#86efac",textTransform:"uppercase",letterSpacing:"0.05em"}}>
+              {isAdmin ? "🔐 Admin" : "⛳ Jugador"}
+            </span>
+            <button
+              onClick={handleLogout}
+              style={{fontSize:11,color:"#9ca3af",border:"none",backgroundColor:"transparent",cursor:"pointer",padding:"2px 6px"}}
+            >
+              Salir
+            </button>
+          </div>
         </div>
       </nav>
 
       {/* Main */}
       <main style={S.main}>
-        {view==="dashboard" && <Dashboard rankings={rankings} rounds={yearRounds} nav={nav} annual={year===2025?INIT_DATA.annual2025:null} players={players} year={year} hcp2026={hcp2026} />}
+        {view==="dashboard" && <Dashboard rankings={rankings} rounds={yearRounds} nav={nav} annual={year===2025?INIT_DATA.annual2025:null} players={players} year={year} hcp2026={hcp2026} isAdmin={isAdmin} />}
         {view==="rounds" && <Rounds rounds={yearRounds} players={players} nav={nav} year={year} hcp2026={hcp2026} />}
         {view==="round-detail" && <RoundDetail rid={selRound} rounds={rounds} players={players} nav={nav} year={year} hcp2026={hcp2026} allYearRounds={yearRounds} />}
         {view==="players" && <Players rankings={rankings} nav={nav} year={year} hcp2026={hcp2026} />}
         {view==="player-detail" && <PlayerDetail pid={selPlayer} rankings={rankings} rounds={yearRounds} nav={nav} year={year} hcp2026={hcp2026} players={players} />}
         {view==="compare" && <Compare rankings={rankings} cmpIds={cmpIds} setCmpIds={setCmpIds} rounds={yearRounds} />}
-        {view==="manual" && <ManualEntry players={players} allRounds={rounds} yearRounds={yearRounds} saveRounds={saveRounds} nav={nav} />}
-        {view==="reglamento" && <Reglamento hcp2026={hcp2026} saveHcp2026={saveHcp2026} />}
-        {view==="settings" && <Settings players={players} savePlayers={savePlayers} rounds={rounds} saveRounds={saveRounds} hcp2026={hcp2026} saveHcp2026={saveHcp2026} />}
+        {view==="manual" && isAdmin && <ManualEntry players={players} allRounds={rounds} yearRounds={yearRounds} saveRounds={saveRounds} nav={nav} />}
+        {view==="manual" && !isAdmin && <div style={S.empty}>🔒 Acceso restringido a administradores</div>}
+        {view==="reglamento" && <Reglamento hcp2026={hcp2026} saveHcp2026={saveHcp2026} isAdmin={isAdmin} />}
+        {view==="settings" && isAdmin && <Settings players={players} savePlayers={savePlayers} rounds={rounds} saveRounds={saveRounds} hcp2026={hcp2026} saveHcp2026={saveHcp2026} />}
+        {view==="settings" && !isAdmin && <div style={S.empty}>🔒 Acceso restringido a administradores</div>}
       </main>
     </div>
   );
 }
 
 // ======== DASHBOARD ========
-function Dashboard({rankings, rounds, nav, annual, players, year, hcp2026}) {
+function Dashboard({rankings, rounds, nav, annual, players, year, hcp2026, isAdmin}) {
   const top5 = rankings.slice(0,5);
   const sortedRounds = [...rounds].sort((a,b) => new Date(b.date)-new Date(a.date));
   const months = year === 2025 ? ['Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'] : null;
@@ -375,7 +478,7 @@ function Dashboard({rankings, rounds, nav, annual, players, year, hcp2026}) {
           <h2 style={{color:"#1a472a",margin:"0 0 8px"}}>Campeonato {year} aún sin rondas</h2>
           <p style={{color:"#6b7280",fontSize:14,marginBottom:16}}>Sube una foto de scorecard o ingresa datos manualmente para empezar.</p>
           <div style={{display:"flex",gap:8,justifyContent:"center",flexWrap:"wrap"}}>
-            <button style={{...S.btn,...S.btnP}} onClick={()=>nav("manual")}>📝 Cargar Ronda</button>
+            {isAdmin && <button style={{...S.btn,...S.btnP}} onClick={()=>nav("manual")}>📝 Cargar Ronda</button>}
           </div>
         </div>
       )}
@@ -1023,7 +1126,7 @@ function Settings({players, savePlayers, rounds, saveRounds, hcp2026, saveHcp202
 
 
 // ======== REGLAMENTO ========
-function Reglamento({hcp2026, saveHcp2026}) {
+function Reglamento({hcp2026, saveHcp2026, isAdmin}) {
   const [section, setSection] = useState("general");
   const sections = [
     {id:"general",label:"General"},
