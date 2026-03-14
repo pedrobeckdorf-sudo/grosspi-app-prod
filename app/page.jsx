@@ -376,8 +376,7 @@ export default function App() {
 
   const yearRounds = useMemo(() => rounds.filter(r => roundYear(r) === year), [rounds, year]);
   const rankings = useMemo(() => computeRankingsFromRounds(players, yearRounds, year, hcp2026), [players, yearRounds, year, hcp2026]);
-  const availableYears = useMemo(() => [...new Set(rounds.map(roundYear)), 2025, 2026].sort()), [rounds]);
-
+const availableYears = useMemo(() => [...new Set(rounds.map(roundYear)), 2025, 2026].sort(), [rounds]);
   if (!loaded) {
     return (
       <div style={S.loadScreen}>
