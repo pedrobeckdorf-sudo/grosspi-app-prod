@@ -136,7 +136,7 @@ async function saveStorage(key, val) {
 
 const SK = { players: "grosspi:players", rounds: "grosspi:rounds", hcp2026: "grosspi:hcp2026", role: "grosspi:role" };
 
-const ADMIN_PIN = "grosspi2026";
+const ADMIN_PIN = "Sbv1240";
 
 // ======== LOGIN SCREEN ========
 function LoginScreen({ onLogin }) {
