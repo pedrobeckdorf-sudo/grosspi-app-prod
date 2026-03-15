@@ -1907,16 +1907,32 @@ function HcpChart({ history, inicial }) {
         {vals.map((v, i) => {
           const yr = years[i];
           const isLast = i === lastIdx;
-          const showLabel = i === 0 || isLast || n <= 8 || yearChanges.includes(i);
+          const isInicial = history[i]?.roundName === "Inicial 2026";
+          const showLabel = i === 0 || isLast || n <= 8 || yearChanges.includes(i) || isInicial;
+          const cx = PAD + i * xStep;
+          const cy = yScale(v);
           return (
             <g key={i}>
-              <circle cx={PAD + i * xStep} cy={yScale(v)} r={isLast ? 5 : 3}
-                fill={dotColor(yr, isLast)} stroke="#fff" strokeWidth="1.5" />
+              {isInicial ? (
+                // Diamond shape for Inicial 2026
+                <polygon
+                  points={`${cx},${cy-6} ${cx+6},${cy} ${cx},${cy+6} ${cx-6},${cy}`}
+                  fill="#2563eb" stroke="#fff" strokeWidth="1.5"
+                />
+              ) : (
+                <circle cx={cx} cy={cy} r={isLast ? 5 : 3}
+                  fill={dotColor(yr, isLast)} stroke="#fff" strokeWidth="1.5" />
+              )}
               {showLabel && (
-                <text x={PAD + i * xStep} y={yScale(v) - 7} textAnchor="middle"
-                  fontSize="9" fontWeight={isLast ? "bold" : "normal"}
-                  fill={isLast ? "#92400e" : yr === 2025 ? "#374151" : "#1d4ed8"}>
+                <text x={cx} y={cy - (isInicial ? 9 : 7)} textAnchor="middle"
+                  fontSize="9" fontWeight={isLast || isInicial ? "bold" : "normal"}
+                  fill={isLast ? "#92400e" : isInicial ? "#1d4ed8" : yr === 2025 ? "#374151" : "#1d4ed8"}>
                   {v}
+                </text>
+              )}
+              {isInicial && (
+                <text x={cx} y={cy + 16} textAnchor="middle" fontSize="8" fill="#2563eb" fontWeight="600">
+                  Ini.26
                 </text>
               )}
             </g>
@@ -1952,29 +1968,17 @@ function Stats({ allRounds, players, rankings, year, hcp2026, availableYears }) 
     [...rounds].sort((a,b) => new Date(a.date||0) - new Date(b.date||0)),
   [rounds]);
 
-  // Helper: get gross HCP for a player in a 2025 round
+  // Helper: get gross HCP for a player in a 2025 round — always from INIT_DATA
   const get2025Hcp = (pid, roundName) => {
-    const pr = effectiveRankings.find(x => x.id === pid);
-    if (!pr) return null;
-    const gb = pr.grossByMonth || {};
+    const gb = INIT_DATA.annual2025[pid]?.grossPts || {};
     if (gb[roundName] != null) return 36 - gb[roundName];
-    const monthMap = {
-      "Marzo":"Mar","Abril":"Abr","Mayo":"May","Junio":"Jun",
-      "Julio":"Jul","Agosto":"Ago","Septiembre":"Sep","Octubre":"Oct",
-      "Noviembre":"Nov","Diciembre":"Dic","Adicional 1":"Adic 1","Adicional 2":"Adic 2"
-    };
-    for (const [full, abbr] of Object.entries(monthMap)) {
-      if (roundName.includes(full) || roundName.includes(abbr)) {
-        if (gb[abbr] != null) return 36 - gb[abbr];
-      }
+    const monthMap = {"Marzo":"Mar","Abril":"Abr","Mayo":"May","Junio":"Jun","Julio":"Jul","Agosto":"Ago","Septiembre":"Sep","Octubre":"Oct","Noviembre":"Nov","Diciembre":"Dic","Adicional 1":"Adic 1","Adicional 2":"Adic 2"};
+    for (const [full,abbr] of Object.entries(monthMap)) {
+      if ((roundName.includes(full)||roundName.includes(abbr)) && gb[abbr]!=null) return 36-gb[abbr];
     }
-    if (roundName.includes("Adic")) {
-      const n = roundName.includes("2") ? "Adic 2" : "Adic 1";
-      if (gb[n] != null) return 36 - gb[n];
-    }
+    if (roundName.includes("Adic")) { const n=roundName.includes("2")?"Adic 2":"Adic 1"; if(gb[n]!=null) return 36-gb[n]; }
     return null;
   };
-
   // Determine if a round belongs to 2025 (for HCP calc mode)
   const isRound2025 = (r) => roundYear(r) === 2025;
 
@@ -2216,7 +2220,7 @@ function Stats({ allRounds, players, rankings, year, hcp2026, availableYears }) 
       {/* ── Ranking completo ── */}
       {tab==="ranking" && (
         <div style={S.card}>
-          <h2 style={S.cardTitle}>🏆 Ranking Completo {year}</h2>
+          <h2 style={S.cardTitle}>🏆 Ranking {statsYear === "all" ? "Completo" : statsYear}</h2>
           <div style={{fontSize:11,color:"#6b7280",marginBottom:10}}>
             Jugadores con menos de 7 rondas: suma de todas · Con 7 o más: suma de las mejores 7
           </div>
@@ -2229,7 +2233,7 @@ function Stats({ allRounds, players, rankings, year, hcp2026, availableYears }) 
             <th style={S.th}>Prom</th>
             <th style={S.th}>Modo</th>
           </tr></thead><tbody>
-            {rankings.filter(p=>p.tarjetas>0).map((p,i) => (
+            {effectiveRankings.filter(p=>p.tarjetas>0).map((p,i) => (
               <tr key={p.id} style={S.tr}>
                 <td style={S.td}><span style={{...S.rank,...(i<3?S["rank"+i]:{})}}>
                   {i===0?"🥇":i===1?"🥈":i===2?"🥉":i+1}
