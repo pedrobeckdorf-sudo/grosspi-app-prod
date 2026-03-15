@@ -1455,22 +1455,54 @@ function HcpChart({ history, inicial }) {
 function Stats({ rounds, players, rankings, year, hcp2026 }) {
   const [tab, setTab] = useState("hcp");
   const [selPlayer, setSelPlayer] = useState("all");
+  const [perfPlayer, setPerfPlayer] = useState("all");
 
   // Build HCP history per round (sorted by date)
   const sortedRounds = useMemo(() =>
     [...rounds].sort((a,b) => new Date(a.date||0) - new Date(b.date||0)),
   [rounds]);
 
+  // Helper: get gross HCP for a player in a 2025 round
+  // grossByMonth keys are like "Mar", "Abr" — map from round name
+  const get2025Hcp = (pid, roundName) => {
+    const pr = rankings.find(x => x.id === pid);
+    if (!pr) return 36;
+    // grossByMonth has abbreviated keys — try direct match first, then partial
+    const gb = pr.grossByMonth || {};
+    if (gb[roundName] != null) return 36 - gb[roundName];
+    // Try matching: "T1 - Marzo" -> "Mar", "T2 - Abril" -> "Abr", etc.
+    const monthMap = {
+      "Marzo":"Mar","Abril":"Abr","Mayo":"May","Junio":"Jun",
+      "Julio":"Jul","Agosto":"Ago","Septiembre":"Sep","Octubre":"Oct",
+      "Noviembre":"Nov","Diciembre":"Dic","Adicional 1":"Adic 1","Adicional 2":"Adic 2"
+    };
+    for (const [full, abbr] of Object.entries(monthMap)) {
+      if (roundName.includes(full) || roundName.includes(abbr)) {
+        if (gb[abbr] != null) return 36 - gb[abbr];
+      }
+    }
+    // Also try Adic pattern
+    if (roundName.includes("Adic")) {
+      const n = roundName.includes("2") ? "Adic 2" : "Adic 1";
+      if (gb[n] != null) return 36 - gb[n];
+    }
+    return null; // player didn't play this round
+  };
+
   // For HCP chart: collect hcp per player per round
   const hcpData = useMemo(() => {
-    const data = {}; // pid -> [{roundName, hcp}]
+    const data = {};
     players.forEach(p => {
       data[p.id] = [];
       sortedRounds.forEach((r, rIdx) => {
         if (!r.scores?.[p.id]) return;
-        const hcp = year >= 2026
-          ? calcDynamicHcp(p.id, rIdx, sortedRounds, players, hcp2026)
-          : (36 - (rankings.find(x=>x.id===p.id)?.grossByMonth?.[r.name] || 0));
+        let hcp;
+        if (year >= 2026) {
+          hcp = calcDynamicHcp(p.id, rIdx, sortedRounds, players, hcp2026);
+        } else {
+          hcp = get2025Hcp(p.id, r.name);
+          if (hcp === null) return;
+        }
         data[p.id].push({ roundName: r.name, hcp, date: r.date });
       });
     });
@@ -1479,26 +1511,32 @@ function Stats({ rounds, players, rankings, year, hcp2026 }) {
 
   // Average HCP per round across all players who played
   const avgHcpPerRound = useMemo(() => {
-    return sortedRounds.map(r => {
+    return sortedRounds.map((r, rIdx) => {
       const hcps = players
         .filter(p => r.scores?.[p.id])
         .map(p => {
-          const rIdx = sortedRounds.indexOf(r);
-          return year >= 2026
-            ? calcDynamicHcp(p.id, rIdx, sortedRounds, players, hcp2026)
-            : (36 - (rankings.find(x=>x.id===p.id)?.grossByMonth?.[r.name] || 0));
-        });
-      return { roundName: r.name, avg: hcps.length ? Math.round(hcps.reduce((s,v)=>s+v,0)/hcps.length) : null };
+          if (year >= 2026) return calcDynamicHcp(p.id, rIdx, sortedRounds, players, hcp2026);
+          const h = get2025Hcp(p.id, r.name);
+          return h;
+        })
+        .filter(h => h !== null);
+      return {
+        roundName: r.name,
+        avg: hcps.length ? Math.round(hcps.reduce((s,v)=>s+v,0)/hcps.length) : null
+      };
     }).filter(x => x.avg !== null);
   }, [sortedRounds, players, year, hcp2026, rankings]);
 
-  // Performance: hole avg across all rounds, color-coded
+  // Performance: hole avg — filterable by player
   const holePerf = useMemo(() => {
     const sums = Array(18).fill(0);
     const counts = Array(18).fill(0);
     sortedRounds.forEach(r => {
       if (!r.scores) return;
-      Object.values(r.scores).forEach(holes => {
+      const entries = perfPlayer === "all"
+        ? Object.entries(r.scores)
+        : Object.entries(r.scores).filter(([pid]) => pid === perfPlayer);
+      entries.forEach(([, holes]) => {
         holes.forEach((s,i) => { if (s > 0) { sums[i]+=s; counts[i]++; } });
       });
     });
@@ -1507,7 +1545,7 @@ function Stats({ rounds, players, rankings, year, hcp2026 }) {
       avg: counts[i] ? s/counts[i] : null,
       count: counts[i]
     }));
-  }, [sortedRounds]);
+  }, [sortedRounds, perfPlayer]);
 
   // Selected player data for HCP chart
   const selectedPlayerData = selPlayer === "all"
@@ -1598,7 +1636,21 @@ function Stats({ rounds, players, rankings, year, hcp2026 }) {
       {/* ── Performance por hoyo ── */}
       {tab==="perf" && (
         <div style={S.card}>
-          <h2 style={S.cardTitle}>🏌️ Performance por Hoyo (promedio todas las rondas)</h2>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,flexWrap:"wrap",gap:8}}>
+            <h2 style={{...S.cardTitle,margin:0}}>🏌️ Performance por Hoyo</h2>
+            <select style={{...S.input,width:"auto",minWidth:160}}
+              value={perfPlayer} onChange={e=>setPerfPlayer(e.target.value)}>
+              <option value="all">Todos los jugadores</option>
+              {players.map(p => (
+                <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
+            </select>
+          </div>
+          <div style={{fontSize:11,color:"#6b7280",marginBottom:12}}>
+            {perfPlayer==="all"
+              ? "Promedio de todos los jugadores en todas las rondas"
+              : `Promedio de ${players.find(p=>p.id===perfPlayer)?.name} en todas sus rondas`}
+          </div>
           <div style={{display:"flex",gap:3,alignItems:"flex-end",height:160,marginBottom:16}}>
             {holePerf.map(({hole,par,avg,count},i) => {
               const maxAvg = Math.max(...holePerf.map(h=>h.avg||0), 1);
