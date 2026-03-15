@@ -62,13 +62,22 @@ function calcDynamicHcp(playerId, roundIndex, allRounds, players, hcpData) {
 // Tiebreaker: best 3, then best 2, then best 1 (Art. 16)
 function tiebreaker(a, b) {
   if (a.totalNet !== b.totalNet) return b.totalNet - a.totalNet;
-  // Compare sum of best 3
   for (let k = 3; k >= 1; k--) {
     const aTop = a.best7Net.slice(0, k).reduce((s,v) => s+v, 0);
     const bTop = b.best7Net.slice(0, k).reduce((s,v) => s+v, 0);
     if (aTop !== bTop) return bTop - aTop;
   }
   return 0;
+}
+
+// Compute ranking score: sum all if <7 rounds played, best 7 if >=7
+function rankingScore(netVals) {
+  const sorted = [...netVals].sort((a,b) => b-a);
+  if (netVals.length < 7) {
+    return { total: netVals.reduce((s,v)=>s+v,0), best7: sorted, usedAll: true };
+  }
+  const best7 = sorted.slice(0,7);
+  return { total: best7.reduce((s,v)=>s+v,0), best7, usedAll: false };
 }
 
 const COURSE = INIT_DATA.course;
@@ -273,8 +282,6 @@ function roundYear(r) {
 
 // Compute rankings dynamically from round data (for 2026+)
 function computeRankingsFromRounds(players, yearRounds, yearNum, hcpData) {
-  const BEST_N = 7;
-  const months = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic','Adic 1','Adic 2'];
   return players.map(p => {
     const netByMonth = {};
     const grossByMonth = {};
@@ -282,12 +289,12 @@ function computeRankingsFromRounds(players, yearRounds, yearNum, hcpData) {
     let tarjetas = 0;
     const netVals = [];
     const grossVals = [];
+    const hcpHistory = []; // [{roundName, hcp}]
 
-    yearRounds.forEach(r => {
+    yearRounds.forEach((r, rIdx) => {
       if (!r.scores?.[p.id]) return;
       const holes = r.scores[p.id];
-      // Compute dynamic HCP for this round
-      const hcp = yearNum >= 2026 ? calcDynamicHcp(p.id, yearRounds.indexOf(r), yearRounds, players, hcpData) : (p.handicap || 18);
+      const hcp = yearNum >= 2026 ? calcDynamicHcp(p.id, rIdx, yearRounds, players, hcpData) : (p.handicap || 18);
       let netPts = 0, grossPts = 0, strokes = 0;
       holes.forEach((s, i) => {
         if (s > 0) {
@@ -302,13 +309,12 @@ function computeRankingsFromRounds(players, yearRounds, yearNum, hcpData) {
       strokesByMonth[label] = strokes;
       netVals.push(netPts);
       grossVals.push(grossPts);
+      hcpHistory.push({ roundName: label, hcp, roundDate: r.date });
       tarjetas++;
     });
 
-    const best7Net = [...netVals].sort((a,b) => b-a).slice(0, BEST_N);
-    const best7Gross = [...grossVals].sort((a,b) => b-a).slice(0, BEST_N);
-    const totalNet7 = best7Net.reduce((s,v) => s+v, 0);
-    const totalGross7 = best7Gross.reduce((s,v) => s+v, 0);
+    const { total: totalNet7, best7: best7Net } = rankingScore(netVals);
+    const { total: totalGross7, best7: best7Gross } = rankingScore(grossVals);
 
     return {
       ...p,
@@ -323,7 +329,9 @@ function computeRankingsFromRounds(players, yearRounds, yearNum, hcpData) {
       avgGross: best7Gross.length > 0 ? totalGross7 / best7Gross.length : 0,
       netByMonth,
       grossByMonth,
-      strokesByMonth
+      strokesByMonth,
+      hcpHistory,
+      currentHcp: hcpHistory.length > 0 ? hcpHistory[hcpHistory.length-1].hcp : null,
     };
   }).sort(tiebreaker);
 }
@@ -409,7 +417,6 @@ export default function App() {
 
   // Rankings depend on the year
   const annual2025 = INIT_DATA.annual2025;
-  const BEST_N = 7;
 
   const rankings = useMemo(() => {
     if (year === 2025) {
@@ -418,10 +425,14 @@ export default function App() {
         const a = annual2025[p.id];
         const netVals = a?.netPts ? Object.values(a.netPts) : [];
         const grossVals = a?.grossPts ? Object.values(a.grossPts) : [];
-        const best7Net = [...netVals].sort((a,b) => b-a).slice(0, BEST_N);
-        const best7Gross = [...grossVals].sort((a,b) => b-a).slice(0, BEST_N);
-        const totalNet7 = best7Net.reduce((s,v) => s+v, 0);
-        const totalGross7 = best7Gross.reduce((s,v) => s+v, 0);
+        const { total: totalNet7, best7: best7Net } = rankingScore(netVals);
+        const { total: totalGross7, best7: best7Gross } = rankingScore(grossVals);
+        // Build hcpHistory from round data for 2025 (gross-based: 36 - grossPts)
+        const hcpHistory = a?.grossPts
+          ? Object.entries(a.grossPts).map(([roundName, gp]) => ({
+              roundName, hcp: 36 - gp, roundDate: null
+            }))
+          : [];
         return {
           ...p,
           totalNet: totalNet7,
@@ -435,7 +446,9 @@ export default function App() {
           avgGross: best7Gross.length > 0 ? totalGross7 / best7Gross.length : 0,
           netByMonth: a?.netPts || {},
           grossByMonth: a?.grossPts || {},
-          strokesByMonth: a?.strokes || {}
+          strokesByMonth: a?.strokes || {},
+          hcpHistory,
+          currentHcp: hcpHistory.length > 0 ? hcpHistory[hcpHistory.length-1].hcp : p.handicap,
         };
       }).sort(tiebreaker);
     }
@@ -456,6 +469,7 @@ export default function App() {
     {id:"dashboard",icon:"🏆",label:"Dashboard"},
     {id:"rounds",icon:"📅",label:"Rondas"},
     {id:"players",icon:"👥",label:"Jugadores"},
+    {id:"stats",icon:"📊",label:"Estadísticas"},
     {id:"compare",icon:"⚔️",label:"Comparar"},
     ...(isAdmin ? [{id:"manual",icon:"📝",label:"Cargar Ronda"}] : []),
     {id:"reglamento",icon:"📜",label:"Reglamento"},
@@ -531,6 +545,7 @@ export default function App() {
         {view==="round-detail" && <RoundDetail rid={selRound} rounds={rounds} players={players} nav={nav} year={year} hcp2026={hcp2026} allYearRounds={yearRounds} isAdmin={isAdmin} saveRounds={saveRounds} allRounds={rounds} />}
         {view==="players" && <Players rankings={rankings} nav={nav} year={year} hcp2026={hcp2026} />}
         {view==="player-detail" && <PlayerDetail pid={selPlayer} rankings={rankings} rounds={yearRounds} nav={nav} year={year} hcp2026={hcp2026} players={players} />}
+        {view==="stats" && <Stats rounds={yearRounds} players={players} rankings={rankings} year={year} hcp2026={hcp2026} />}
         {view==="compare" && <Compare rankings={rankings} cmpIds={cmpIds} setCmpIds={setCmpIds} rounds={yearRounds} />}
         {view==="manual" && isAdmin && <ManualEntry players={players} allRounds={rounds} yearRounds={yearRounds} saveRounds={saveRounds} nav={nav} />}
         {view==="manual" && !isAdmin && <div style={S.empty}>🔒 Acceso restringido a administradores</div>}
@@ -575,23 +590,36 @@ function Dashboard({rankings, rounds, nav, annual, players, year, hcp2026, isAdm
 
       {/* Ranking */}
       <div style={S.card}>
-        <div style={S.cardHdr}><h2 style={S.cardTitle}>🏆 Ranking Campeonato {year} — Mejores 7 Tarjetas (Pts Netos)</h2><button style={S.link} onClick={()=>nav("players")}>Ver todos →</button></div>
+        <div style={S.cardHdr}>
+          <div>
+            <h2 style={{...S.cardTitle,margin:0}}>🏆 Ranking Campeonato {year}</h2>
+            <div style={{fontSize:11,color:"#6b7280",marginTop:3}}>
+              {rankings.some(p=>p.tarjetas>=7)
+                ? "Suma de mejores 7 tarjetas · jugadores con menos de 7 suman todas"
+                : "Suma de todas las tarjetas jugadas (aún no hay jugadores con 7+)"}
+            </div>
+          </div>
+          <button style={S.link} onClick={()=>nav("players")}>Ver todos →</button>
+        </div>
         <div style={S.tblWrap}>
           <table style={S.tbl}><thead><tr>
-            <th style={S.th}>#</th><th style={{...S.th,textAlign:"left"}}>Jugador</th><th style={S.th}>HCP</th><th style={S.th}>Tarj.</th>
+            <th style={S.th}>#</th><th style={{...S.th,textAlign:"left"}}>Jugador</th>
+            <th style={{...S.th,color:"#b8860b"}} title="HCP actual (última ronda jugada)">HCP ★</th>
+            <th style={S.th}>Tarj.</th>
             {(months || dynamicMonths).map(m => <th key={m} style={{...S.th,fontSize:10}}>{m}</th>)}
-            <th style={{...S.th,borderLeft:"2px solid #d1d5db"}}>BEST 7</th><th style={S.th}>Prom</th>
+            <th style={{...S.th,borderLeft:"2px solid #d1d5db"}}>PTS</th><th style={S.th}>Prom</th>
           </tr></thead>
           <tbody>
             {rankings.slice(0,21).map((p,i) => {
               const colMonths = months || dynamicMonths;
+              const displayHcp = p.currentHcp ?? (year >= 2026 ? (hcp2026[p.id]?.inicial ?? p.handicap) : p.handicap);
               return (
                 <tr key={p.id} style={{...S.tr,cursor:"pointer"}} onClick={()=>nav("player-detail",{pid:p.id})}>
                   <td style={S.td}><span style={{...S.rank,...(i<3?S["rank"+i]:{})}}>
                     {i===0?"🥇":i===1?"🥈":i===2?"🥉":i+1}
                   </span></td>
                   <td style={{...S.td,textAlign:"left",fontWeight:600,whiteSpace:"nowrap"}}>{p.name}</td>
-                  <td style={S.td}>{year >= 2026 ? (hcp2026[p.id]?.inicial ?? p.handicap) : p.handicap}</td>
+                  <td style={{...S.td,fontWeight:700,color:"#b8860b"}}>{displayHcp}</td>
                   <td style={S.td}>{p.tarjetas}</td>
                   {colMonths.map(m => {
                     const val = p.netByMonth?.[m];
@@ -605,6 +633,7 @@ function Dashboard({rankings, rounds, nav, annual, players, year, hcp2026, isAdm
             })}
           </tbody></table>
         </div>
+        <div style={{fontSize:11,color:"#9ca3af",marginTop:8}}>★ HCP actual = calculado con la última ronda jugada (36 - pts gross)</div>
       </div>
 
       {/* Recent Rounds */}
@@ -974,7 +1003,8 @@ function PlayerDetail({pid, rankings, rounds, nav, year, hcp2026, players}) {
 
     return {birdies, pars, bogeys, doubles, eagles, holesPlayed,
       holeAverages: holeAvg.map((s,i) => holeCounts[i] ? s/holeCounts[i] : 0),
-      roundHistory};
+      roundHistory,
+      hcpHistory: p.hcpHistory || []};
   }, [pid, p, rounds]);
 
   const months = Object.keys(p.netByMonth || {});
@@ -985,15 +1015,51 @@ function PlayerDetail({pid, rankings, rounds, nav, year, hcp2026, players}) {
       <button style={S.back} onClick={()=>nav("players")}>← Jugadores</button>
       <div style={{display:"flex",alignItems:"center",gap:16,marginBottom:24}}>
         <div style={{...S.avatar,width:56,height:56,fontSize:24}}>{p.name.charAt(0)}</div>
-        <div><h1 style={{...S.title,margin:0}}>{p.name}</h1><p style={{...S.sub,margin:"4px 0 0"}}>HCP Inicial {hcpInicial} · {p.tarjetas} tarjetas · Ranking #{rankings.indexOf(p)+1}</p></div>
+        <div>
+          <h1 style={{...S.title,margin:0}}>{p.name}</h1>
+          <p style={{...S.sub,margin:"4px 0 0"}}>
+            HCP Inicial {hcpInicial}
+            {p.currentHcp != null && p.currentHcp !== hcpInicial && (
+              <span style={{marginLeft:8,padding:"2px 8px",borderRadius:10,backgroundColor:"#fef3c7",color:"#92400e",fontWeight:700,fontSize:12}}>
+                HCP Actual ★ {p.currentHcp}
+              </span>
+            )}
+            {p.currentHcp != null && p.currentHcp === hcpInicial && (
+              <span style={{marginLeft:8,padding:"2px 8px",borderRadius:10,backgroundColor:"#f0f7f0",color:"#1a472a",fontWeight:700,fontSize:12}}>
+                HCP Actual ★ {p.currentHcp}
+              </span>
+            )}
+            {" · "}{p.tarjetas} tarjetas · Ranking #{rankings.indexOf(p)+1}
+          </p>
+        </div>
       </div>
 
       <div style={S.grid4}>
-        <div style={S.kpi}><div style={S.kpiVal}>{p.totalNet}</div><div style={S.kpiLbl}>Best 7 Neto</div></div>
-        <div style={S.kpi}><div style={S.kpiVal}>{p.totalGross}</div><div style={S.kpiLbl}>Best 7 Gross</div></div>
+        <div style={S.kpi}><div style={S.kpiVal}>{p.totalNet}</div><div style={S.kpiLbl}>{p.tarjetas >= 7 ? "Best 7 Neto" : "Total Neto"}</div></div>
+        <div style={S.kpi}><div style={S.kpiVal}>{p.totalGross}</div><div style={S.kpiLbl}>{p.tarjetas >= 7 ? "Best 7 Gross" : "Total Gross"}</div></div>
         <div style={S.kpi}><div style={S.kpiVal}>{p.avgNet?.toFixed(1)}</div><div style={S.kpiLbl}>Prom Neto</div></div>
-        <div style={S.kpi}><div style={S.kpiVal}>{p.totalNetAll}</div><div style={S.kpiLbl}>Total Neto</div></div>
+        <div style={S.kpi}><div style={{...S.kpiVal,color:"#b8860b"}}>{p.currentHcp ?? hcpInicial}</div><div style={S.kpiLbl}>HCP Actual ★</div></div>
       </div>
+
+      {/* HCP Evolution */}
+      {stats.hcpHistory.length > 0 && (
+        <div style={S.card}>
+          <h2 style={S.cardTitle}>📉 Evolución del Handicap</h2>
+          <HcpChart history={stats.hcpHistory} inicial={hcpInicial} />
+          <div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:12}}>
+            {stats.hcpHistory.map((h,i) => (
+              <div key={i} style={{
+                textAlign:"center",padding:"6px 10px",borderRadius:8,minWidth:60,
+                backgroundColor: i===stats.hcpHistory.length-1 ? "#1a472a" : "#f9fafb",
+                border: i===stats.hcpHistory.length-1 ? "none" : "1px solid #e5e7eb"
+              }}>
+                <div style={{fontSize:10,color:i===stats.hcpHistory.length-1?"#86efac":"#9ca3af",marginBottom:2,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",maxWidth:70}}>{h.roundName.replace("T","T").split(" - ")[0]}</div>
+                <div style={{fontSize:16,fontWeight:800,color:i===stats.hcpHistory.length-1?"#fff":"#1a472a"}}>{h.hcp}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Monthly breakdown */}
       <div style={S.card}>
@@ -1340,6 +1406,292 @@ function ManualEntry({players, allRounds, yearRounds, saveRounds, nav}) {
       >
         Guardar Score
       </button>
+    </div>
+  );
+}
+
+// ======== HCP CHART (SVG sparkline) ========
+function HcpChart({ history, inicial }) {
+  if (!history || history.length === 0) return null;
+  const vals = history.map(h => h.hcp);
+  const allVals = [inicial, ...vals];
+  const min = Math.max(0, Math.min(...allVals) - 2);
+  const max = Math.max(...allVals) + 2;
+  const W = 500, H = 80, PAD = 10;
+  const xStep = (W - PAD*2) / Math.max(vals.length, 1);
+  const yScale = v => PAD + ((max - v) / (max - min)) * (H - PAD*2);
+
+  const points = vals.map((v,i) => `${PAD + i * xStep},${yScale(v)}`).join(" ");
+  const lastIdx = vals.length - 1;
+
+  return (
+    <div style={{overflowX:"auto"}}>
+      <svg viewBox={`0 0 ${W} ${H}`} style={{width:"100%",minWidth:300,height:H}} xmlns="http://www.w3.org/2000/svg">
+        {/* Reference line: inicial */}
+        <line x1={PAD} y1={yScale(inicial)} x2={W-PAD} y2={yScale(inicial)}
+          stroke="#d1d5db" strokeWidth="1" strokeDasharray="4,3" />
+        <text x={W-PAD+2} y={yScale(inicial)+4} fontSize="9" fill="#9ca3af">{inicial}</text>
+
+        {/* Line */}
+        <polyline points={points} fill="none" stroke="#1a472a" strokeWidth="2" strokeLinejoin="round" />
+
+        {/* Dots */}
+        {vals.map((v,i) => (
+          <g key={i}>
+            <circle cx={PAD + i*xStep} cy={yScale(v)} r={i===lastIdx?5:3}
+              fill={i===lastIdx?"#b8860b":"#1a472a"} stroke="#fff" strokeWidth="1.5" />
+            {(i===0 || i===lastIdx || vals.length<=6) && (
+              <text x={PAD + i*xStep} y={yScale(v)-7} textAnchor="middle" fontSize="9"
+                fontWeight={i===lastIdx?"bold":"normal"} fill={i===lastIdx?"#92400e":"#374151"}>{v}</text>
+            )}
+          </g>
+        ))}
+      </svg>
+    </div>
+  );
+}
+
+// ======== STATS ========
+function Stats({ rounds, players, rankings, year, hcp2026 }) {
+  const [tab, setTab] = useState("hcp");
+  const [selPlayer, setSelPlayer] = useState("all");
+
+  // Build HCP history per round (sorted by date)
+  const sortedRounds = useMemo(() =>
+    [...rounds].sort((a,b) => new Date(a.date||0) - new Date(b.date||0)),
+  [rounds]);
+
+  // For HCP chart: collect hcp per player per round
+  const hcpData = useMemo(() => {
+    const data = {}; // pid -> [{roundName, hcp}]
+    players.forEach(p => {
+      data[p.id] = [];
+      sortedRounds.forEach((r, rIdx) => {
+        if (!r.scores?.[p.id]) return;
+        const hcp = year >= 2026
+          ? calcDynamicHcp(p.id, rIdx, sortedRounds, players, hcp2026)
+          : (36 - (rankings.find(x=>x.id===p.id)?.grossByMonth?.[r.name] || 0));
+        data[p.id].push({ roundName: r.name, hcp, date: r.date });
+      });
+    });
+    return data;
+  }, [sortedRounds, players, year, hcp2026, rankings]);
+
+  // Average HCP per round across all players who played
+  const avgHcpPerRound = useMemo(() => {
+    return sortedRounds.map(r => {
+      const hcps = players
+        .filter(p => r.scores?.[p.id])
+        .map(p => {
+          const rIdx = sortedRounds.indexOf(r);
+          return year >= 2026
+            ? calcDynamicHcp(p.id, rIdx, sortedRounds, players, hcp2026)
+            : (36 - (rankings.find(x=>x.id===p.id)?.grossByMonth?.[r.name] || 0));
+        });
+      return { roundName: r.name, avg: hcps.length ? Math.round(hcps.reduce((s,v)=>s+v,0)/hcps.length) : null };
+    }).filter(x => x.avg !== null);
+  }, [sortedRounds, players, year, hcp2026, rankings]);
+
+  // Performance: hole avg across all rounds, color-coded
+  const holePerf = useMemo(() => {
+    const sums = Array(18).fill(0);
+    const counts = Array(18).fill(0);
+    sortedRounds.forEach(r => {
+      if (!r.scores) return;
+      Object.values(r.scores).forEach(holes => {
+        holes.forEach((s,i) => { if (s > 0) { sums[i]+=s; counts[i]++; } });
+      });
+    });
+    return sums.map((s,i) => ({
+      hole: i+1, par: COURSE.pars[i],
+      avg: counts[i] ? s/counts[i] : null,
+      count: counts[i]
+    }));
+  }, [sortedRounds]);
+
+  // Selected player data for HCP chart
+  const selectedPlayerData = selPlayer === "all"
+    ? avgHcpPerRound.map(x => ({ roundName: x.roundName, hcp: x.avg }))
+    : (hcpData[selPlayer] || []);
+
+  const selectedPlayerInicial = selPlayer === "all"
+    ? (avgHcpPerRound[0]?.avg ?? 20)
+    : (year >= 2026 ? (hcp2026[selPlayer]?.inicial ?? players.find(p=>p.id===selPlayer)?.handicap ?? 20)
+       : (players.find(p=>p.id===selPlayer)?.handicap ?? 20));
+
+  const holeColor = (avg, par) => {
+    if (!avg) return "#e5e7eb";
+    const d = avg - par;
+    if (d <= 1) return "#22c55e";       // par o mejor / bogey → verde
+    if (d <= 2) return "#3b82f6";       // doble bogey → azul
+    return "#ef4444";                   // más que doble bogey → rojo
+  };
+
+  const holeLabel = (avg, par) => {
+    if (!avg) return "-";
+    const d = avg - par;
+    if (d <= 0) return "≤Par";
+    if (d <= 1) return "Bogey";
+    if (d <= 2) return "D.Bogey";
+    return "+"+Math.round(d);
+  };
+
+  const tabs = [
+    { id:"hcp", label:"HCP Medio" },
+    { id:"perf", label:"Performance" },
+    { id:"ranking", label:"Ranking" },
+  ];
+
+  return (
+    <div style={S.view}>
+      <div style={S.hdr}><h1 style={S.title}>Estadísticas {year}</h1></div>
+
+      {/* Tab switcher */}
+      <div style={{display:"flex",gap:6,marginBottom:16,flexWrap:"wrap"}}>
+        {tabs.map(t => (
+          <button key={t.id} style={{...S.chip,...(tab===t.id?{backgroundColor:"#1a472a",color:"#fff",borderColor:"#1a472a"}:{})}}
+            onClick={()=>setTab(t.id)}>{t.label}</button>
+        ))}
+      </div>
+
+      {/* ── HCP Medio ── */}
+      {tab==="hcp" && (
+        <div style={S.card}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,flexWrap:"wrap",gap:8}}>
+            <h2 style={{...S.cardTitle,margin:0}}>📉 Evolución del Handicap</h2>
+            <select style={{...S.input,width:"auto",minWidth:160}}
+              value={selPlayer} onChange={e=>setSelPlayer(e.target.value)}>
+              <option value="all">Promedio todos</option>
+              {players.map(p => (
+                <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
+            </select>
+          </div>
+          {selectedPlayerData.length === 0 ? (
+            <div style={{textAlign:"center",color:"#9ca3af",padding:24}}>Sin datos de rondas para este año</div>
+          ) : (
+            <>
+              <HcpChart history={selectedPlayerData} inicial={selectedPlayerInicial} />
+              <div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:12}}>
+                {selectedPlayerData.map((h,i) => {
+                  const isLast = i===selectedPlayerData.length-1;
+                  return (
+                    <div key={i} style={{textAlign:"center",padding:"6px 10px",borderRadius:8,minWidth:55,
+                      backgroundColor:isLast?"#1a472a":"#f9fafb",
+                      border:isLast?"none":"1px solid #e5e7eb"}}>
+                      <div style={{fontSize:9,color:isLast?"#86efac":"#9ca3af",marginBottom:1}}>
+                        {h.roundName.split(" - ")[0]}
+                      </div>
+                      <div style={{fontSize:16,fontWeight:800,color:isLast?"#fff":"#1a472a"}}>{h.hcp}</div>
+                    </div>
+                  );
+                })}
+              </div>
+              {selPlayer==="all" && (
+                <p style={{fontSize:11,color:"#9ca3af",marginTop:8}}>Promedio del HCP de todos los jugadores que participaron en cada ronda</p>
+              )}
+            </>
+          )}
+        </div>
+      )}
+
+      {/* ── Performance por hoyo ── */}
+      {tab==="perf" && (
+        <div style={S.card}>
+          <h2 style={S.cardTitle}>🏌️ Performance por Hoyo (promedio todas las rondas)</h2>
+          <div style={{display:"flex",gap:3,alignItems:"flex-end",height:160,marginBottom:16}}>
+            {holePerf.map(({hole,par,avg,count},i) => {
+              const maxAvg = Math.max(...holePerf.map(h=>h.avg||0), 1);
+              return (
+                <div key={i} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",height:"100%",justifyContent:"flex-end"}}>
+                  <div style={{fontSize:9,color:"#6b7280",marginBottom:2,fontWeight:600}}>{avg?avg.toFixed(1):"-"}</div>
+                  <div style={{width:"100%",maxWidth:30,borderRadius:"3px 3px 0 0",
+                    backgroundColor:holeColor(avg,par),
+                    height:avg?`${(avg/(maxAvg+0.5))*100}%`:"2px",
+                    minHeight:4,transition:"height 0.3s",opacity:0.85}} />
+                  <div style={{fontSize:10,fontWeight:700,marginTop:4,color:"#374151"}}>{hole}</div>
+                  <div style={{fontSize:8,color:"#9ca3af"}}>P{par}</div>
+                </div>
+              );
+            })}
+          </div>
+          {/* Legend */}
+          <div style={{display:"flex",gap:12,flexWrap:"wrap",marginBottom:16}}>
+            {[{c:"#22c55e",l:"Par o Bogey"},
+              {c:"#3b82f6",l:"Doble Bogey"},
+              {c:"#ef4444",l:"Más que Doble"}
+            ].map(x=>(
+              <div key={x.l} style={{display:"flex",alignItems:"center",gap:5,fontSize:11,color:"#6b7280"}}>
+                <div style={{width:12,height:12,borderRadius:3,backgroundColor:x.c}}/>
+                {x.l}
+              </div>
+            ))}
+          </div>
+          {/* Table */}
+          <div style={S.tblWrap}><table style={S.tbl}><thead><tr>
+            <th style={S.th}>Hoyo</th><th style={S.th}>Par</th>
+            <th style={S.th}>Prom Golpes</th><th style={S.th}>vs Par</th>
+            <th style={S.th}>Categoría</th><th style={S.th}>Rondas</th>
+          </tr></thead><tbody>
+            {holePerf.map(({hole,par,avg,count}) => (
+              <tr key={hole} style={S.tr}>
+                <td style={{...S.td,fontWeight:700}}>H{hole}</td>
+                <td style={S.td}>{par}</td>
+                <td style={{...S.td,fontWeight:600}}>{avg?avg.toFixed(2):"-"}</td>
+                <td style={{...S.td,fontWeight:600,color:avg&&avg-par>0?"#dc2626":"#16a34a"}}>
+                  {avg?(avg-par>0?"+":""+(avg-par).toFixed(2)):"-"}
+                </td>
+                <td style={S.td}>
+                  <span style={{padding:"2px 8px",borderRadius:10,backgroundColor:holeColor(avg,par),
+                    color:"#fff",fontSize:10,fontWeight:600}}>
+                    {holeLabel(avg,par)}
+                  </span>
+                </td>
+                <td style={{...S.td,color:"#9ca3af"}}>{count}</td>
+              </tr>
+            ))}
+          </tbody></table></div>
+        </div>
+      )}
+
+      {/* ── Ranking completo ── */}
+      {tab==="ranking" && (
+        <div style={S.card}>
+          <h2 style={S.cardTitle}>🏆 Ranking Completo {year}</h2>
+          <div style={{fontSize:11,color:"#6b7280",marginBottom:10}}>
+            Jugadores con menos de 7 rondas: suma de todas · Con 7 o más: suma de las mejores 7
+          </div>
+          <div style={S.tblWrap}><table style={S.tbl}><thead><tr>
+            <th style={S.th}>#</th>
+            <th style={{...S.th,textAlign:"left"}}>Jugador</th>
+            <th style={{...S.th,color:"#b8860b"}}>HCP★</th>
+            <th style={S.th}>Tarj.</th>
+            <th style={{...S.th,color:"#1a472a"}}>PTS</th>
+            <th style={S.th}>Prom</th>
+            <th style={S.th}>Modo</th>
+          </tr></thead><tbody>
+            {rankings.filter(p=>p.tarjetas>0).map((p,i) => (
+              <tr key={p.id} style={S.tr}>
+                <td style={S.td}><span style={{...S.rank,...(i<3?S["rank"+i]:{})}}>
+                  {i===0?"🥇":i===1?"🥈":i===2?"🥉":i+1}
+                </span></td>
+                <td style={{...S.td,textAlign:"left",fontWeight:600}}>{p.name}</td>
+                <td style={{...S.td,fontWeight:700,color:"#b8860b"}}>{p.currentHcp ?? p.handicap}</td>
+                <td style={S.td}>{p.tarjetas}</td>
+                <td style={{...S.td,fontWeight:800,color:"#1a472a",fontSize:15}}>{p.totalNet}</td>
+                <td style={{...S.td,color:"#6b7280"}}>{p.avgNet?.toFixed(1)}</td>
+                <td style={S.td}>
+                  <span style={{fontSize:10,padding:"2px 7px",borderRadius:8,
+                    backgroundColor:p.tarjetas>=7?"#f0f7f0":"#fef3c7",
+                    color:p.tarjetas>=7?"#1a472a":"#92400e",fontWeight:600}}>
+                    {p.tarjetas>=7?"Best 7":"Suma"}
+                  </span>
+                </td>
+              </tr>
+            ))}
+          </tbody></table></div>
+        </div>
+      )}
     </div>
   );
 }
