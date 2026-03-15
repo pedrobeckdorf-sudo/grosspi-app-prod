@@ -1062,39 +1062,31 @@ function Players({rankings, nav, year, hcp2026}) {
   );
 }
 
-// ======== HCP EVOLUTION CARD (proper component — useState here, not in IIFE) ========
+// ======== HCP EVOLUTION CARD — always shows full history ========
 function HcpEvolutionCard({ history, handicap }) {
   const availYears = [...new Set(history.map(h=>h.year))].sort();
-  const [hcpYearFilter, setHcpYearFilter] = useState("all");
-
-  const filteredHistory = hcpYearFilter === "all"
-    ? history
-    : history.filter(h => h.year === parseInt(hcpYearFilter));
-  const lastHcp = filteredHistory[filteredHistory.length-1]?.hcp;
+  const lastHcp = history[history.length-1]?.hcp;
 
   return (
     <div style={S.card}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,flexWrap:"wrap",gap:8}}>
         <h2 style={{...S.cardTitle,margin:0}}>📉 Evolución del Handicap</h2>
-        <div style={{display:"flex",gap:5,flexWrap:"wrap",alignItems:"center"}}>
-          {hcpYearFilter === "all" && availYears.length > 1 && availYears.map(y => (
-            <span key={y} style={{display:"flex",alignItems:"center",gap:3,fontSize:11,color:"#6b7280",marginRight:2}}>
-              <span style={{width:9,height:9,borderRadius:"50%",backgroundColor:y===2025?"#1a472a":"#2563eb",display:"inline-block"}}/>
-              {y}
-            </span>
-          ))}
-          <button style={{...S.chip,fontSize:11,padding:"3px 10px",...(hcpYearFilter==="all"?{backgroundColor:"#1a472a",color:"#fff",borderColor:"#1a472a"}:{})}}
-            onClick={()=>setHcpYearFilter("all")}>Todas</button>
-          {availYears.map(y=>(
-            <button key={y} style={{...S.chip,fontSize:11,padding:"3px 10px",...(hcpYearFilter===String(y)?{backgroundColor:y===2025?"#1a472a":"#2563eb",color:"#fff",borderColor:y===2025?"#1a472a":"#2563eb"}:{})}}
-              onClick={()=>setHcpYearFilter(String(y))}>{y}</button>
-          ))}
-        </div>
+        {availYears.length > 1 && (
+          <div style={{display:"flex",gap:10,alignItems:"center"}}>
+            {availYears.map(y => (
+              <span key={y} style={{display:"flex",alignItems:"center",gap:4,fontSize:11,color:"#6b7280"}}>
+                <span style={{width:9,height:9,borderRadius:"50%",
+                  backgroundColor:y===2025?"#1a472a":"#2563eb",display:"inline-block"}}/>
+                {y}
+              </span>
+            ))}
+          </div>
+        )}
       </div>
-      <HcpChart history={filteredHistory} inicial={handicap} />
+      <HcpChart history={history} inicial={handicap} />
       <div style={{display:"flex",gap:5,flexWrap:"wrap",marginTop:10}}>
-        {filteredHistory.map((h,i) => {
-          const isLast = i===filteredHistory.length-1;
+        {history.map((h,i) => {
+          const isLast = i===history.length-1;
           const is25 = h.year===2025;
           return (
             <div key={i} style={{textAlign:"center",padding:"5px 9px",borderRadius:8,minWidth:50,
@@ -1110,7 +1102,7 @@ function HcpEvolutionCard({ history, handicap }) {
           );
         })}
       </div>
-      {hcpYearFilter==="all" && availYears.length > 1 && (
+      {availYears.length > 1 && (
         <div style={{fontSize:11,color:"#9ca3af",marginTop:8}}>
           🟢 2025 · 🔵 2026 · ⭐ último HCP = <b>{lastHcp}</b>
         </div>
