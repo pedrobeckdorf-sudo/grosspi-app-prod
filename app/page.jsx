@@ -464,13 +464,30 @@ export default function App() {
 
   return (
     <div style={S.app}>
-      {/* Mobile hamburger */}
-      <button style={S.hamburger} onClick={() => setMenuOpen(!menuOpen)}>
+      {/* Mobile hamburger — always visible on mobile */}
+      <button
+        className="grosspi-hamburger"
+        style={S.hamburger}
+        onClick={() => setMenuOpen(!menuOpen)}
+        aria-label="Menú"
+      >
         {menuOpen ? "✕" : "☰"}
       </button>
 
+      {/* Dark overlay — tap to close menu on mobile */}
+      {menuOpen && (
+        <div
+          onClick={() => setMenuOpen(false)}
+          style={{position:"fixed",inset:0,backgroundColor:"rgba(0,0,0,0.45)",zIndex:999,display:"none"}}
+          className="mob-overlay"
+        />
+      )}
+
       {/* Sidebar */}
-      <nav style={{...S.sidebar, ...(menuOpen ? S.sidebarOpen : {})}}>
+      <nav
+        style={S.sidebar}
+        className={`grosspi-nav${menuOpen ? " open" : ""}`}
+      >
         <div style={S.logoWrap}>
           <img src={LOGO_SRC} alt="Grosspi" style={S.logoImg} />
         </div>
@@ -1228,17 +1245,47 @@ function ManualEntry({players, allRounds, yearRounds, saveRounds, nav}) {
           </div>
         )}
 
-        {/* Scores Grid */}
+        {/* Scores Grid — front 9 + back 9 */}
         <label style={S.label}>Scores — 18 Hoyos {playerName && `(${playerName})`}</label>
-        <div style={{display:"grid",gridTemplateColumns:"repeat(9,1fr)",gap:4,marginTop:6}}>
-          {Array.from({length:18},(_,i) => (
+
+        {/* Front 9 */}
+        <div style={{fontSize:11,fontWeight:700,color:"#6b7280",marginTop:8,marginBottom:4,textTransform:"uppercase",letterSpacing:"0.04em"}}>Ida (1–9)</div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(9,1fr)",gap:6,marginBottom:12}}>
+          {Array.from({length:9},(_,i) => (
             <div key={i} style={{textAlign:"center"}}>
-              <div style={{fontSize:10,fontWeight:700,color:"#374151"}}>H{i+1}</div>
-              <div style={{fontSize:9,color:"#9ca3af"}}>P{COURSE.pars[i]}</div>
-              <input style={{...S.input,padding:"6px 2px",textAlign:"center",fontSize:15,fontWeight:600,
-                color: form.scores[i] ? scoreColor(parseInt(form.scores[i]), COURSE.pars[i]) : "#9ca3af"
-              }} type="number" min="1" max="15" value={form.scores[i]}
-                onChange={e=>{const s=[...form.scores]; s[i]=e.target.value; setForm({...form,scores:s});}} placeholder="-" />
+              <div style={{fontSize:11,fontWeight:700,color:"#374151"}}>H{i+1}</div>
+              <div style={{fontSize:10,color:"#9ca3af"}}>P{COURSE.pars[i]}</div>
+              <input
+                style={{...S.input,padding:"10px 2px",textAlign:"center",fontSize:18,fontWeight:700,
+                  color: form.scores[i] ? scoreColor(parseInt(form.scores[i]), COURSE.pars[i]) : "#9ca3af",
+                  borderRadius:8, minHeight:44
+                }}
+                type="number" inputMode="numeric" min="1" max="15"
+                value={form.scores[i]}
+                onChange={e=>{const s=[...form.scores]; s[i]=e.target.value; setForm({...form,scores:s});}}
+                placeholder="-"
+              />
+            </div>
+          ))}
+        </div>
+
+        {/* Back 9 */}
+        <div style={{fontSize:11,fontWeight:700,color:"#6b7280",marginBottom:4,textTransform:"uppercase",letterSpacing:"0.04em"}}>Vuelta (10–18)</div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(9,1fr)",gap:6}}>
+          {Array.from({length:9},(_,i) => (
+            <div key={i+9} style={{textAlign:"center"}}>
+              <div style={{fontSize:11,fontWeight:700,color:"#374151"}}>H{i+10}</div>
+              <div style={{fontSize:10,color:"#9ca3af"}}>P{COURSE.pars[i+9]}</div>
+              <input
+                style={{...S.input,padding:"10px 2px",textAlign:"center",fontSize:18,fontWeight:700,
+                  color: form.scores[i+9] ? scoreColor(parseInt(form.scores[i+9]), COURSE.pars[i+9]) : "#9ca3af",
+                  borderRadius:8, minHeight:44
+                }}
+                type="number" inputMode="numeric" min="1" max="15"
+                value={form.scores[i+9]}
+                onChange={e=>{const s=[...form.scores]; s[i+9]=e.target.value; setForm({...form,scores:s});}}
+                placeholder="-"
+              />
             </div>
           ))}
         </div>
@@ -1258,21 +1305,32 @@ function ManualEntry({players, allRounds, yearRounds, saveRounds, nav}) {
       {/* Photo backup */}
       <div style={S.card}>
         <h2 style={S.cardTitle}>📷 Foto de Respaldo (opcional)</h2>
-        <div style={{...S.dropZone,minHeight:100,padding:16}} onClick={()=>document.getElementById("photo-input").click()}
-          onDragOver={e=>e.preventDefault()} onDrop={e=>{e.preventDefault();handlePhoto(e.dataTransfer.files[0])}}>
-          <input id="photo-input" type="file" accept="image/*" style={{display:"none"}} onChange={e=>handlePhoto(e.target.files[0])} />
-          {photo ? (
-            <div style={{textAlign:"center"}}>
-              <img src={photo} alt="Tarjeta" style={{maxWidth:"100%",maxHeight:200,borderRadius:8}} />
-              <div style={{marginTop:8}}><button style={{...S.btn,...S.btnS,fontSize:11,padding:"4px 12px"}} onClick={e=>{e.stopPropagation();setPhoto(null)}}>✕ Quitar foto</button></div>
-            </div>
-          ) : (
-            <div style={{textAlign:"center",color:"#9ca3af"}}>
-              <div style={{fontSize:28}}>📷</div>
-              <div style={{fontSize:12,marginTop:4}}>Arrastra o haz click para adjuntar foto de la tarjeta</div>
-            </div>
-          )}
-        </div>
+        {photo ? (
+          <div style={{textAlign:"center"}}>
+            <img src={photo} alt="Tarjeta" style={{maxWidth:"100%",maxHeight:240,borderRadius:10,border:"1px solid #e5e7eb"}} />
+            <button
+              style={{...S.btn,...S.btnS,marginTop:10,fontSize:12,padding:"8px 16px"}}
+              onClick={()=>setPhoto(null)}
+            >✕ Quitar foto</button>
+          </div>
+        ) : (
+          <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+            {/* Camera button — mobile primary */}
+            <label style={{flex:1,minWidth:130,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:6,padding:"18px 12px",borderRadius:10,border:"2px dashed #86efac",backgroundColor:"#f0fdf4",cursor:"pointer",textAlign:"center"}}>
+              <span style={{fontSize:28}}>📷</span>
+              <span style={{fontSize:12,fontWeight:600,color:"#1a472a"}}>Sacar foto</span>
+              <span style={{fontSize:11,color:"#6b7280"}}>Cámara del celular</span>
+              <input type="file" accept="image/*" capture="environment" style={{display:"none"}} onChange={e=>handlePhoto(e.target.files[0])} />
+            </label>
+            {/* File/gallery button */}
+            <label style={{flex:1,minWidth:130,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:6,padding:"18px 12px",borderRadius:10,border:"2px dashed #d1d5db",backgroundColor:"#f9fafb",cursor:"pointer",textAlign:"center"}}>
+              <span style={{fontSize:28}}>🖼️</span>
+              <span style={{fontSize:12,fontWeight:600,color:"#374151"}}>Galería</span>
+              <span style={{fontSize:11,color:"#6b7280"}}>Elegir archivo</span>
+              <input type="file" accept="image/*" style={{display:"none"}} onChange={e=>handlePhoto(e.target.files[0])} />
+            </label>
+          </div>
+        )}
       </div>
 
       {/* Save Button */}
@@ -1546,16 +1604,31 @@ if (typeof document !== "undefined") {
   @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&display=swap');
   * { box-sizing: border-box; }
   body { margin: 0; }
+
+  /* ── Desktop ── */
+  .grosspi-hamburger { display: none !important; }
+
+  /* ── Mobile ── */
   @media (max-width: 768px) {
-    nav { transform: translateX(-100%); }
-    main { margin-left: 0 !important; padding: 12px !important; }
-    button[style*="hamburger"], div button:first-child { display: flex !important; }
+    .grosspi-hamburger { display: flex !important; }
+    .grosspi-nav { transform: translateX(-100%); }
+    .grosspi-nav.open { transform: translateX(0); }
+    .mob-overlay { display: block !important; }
+    main { margin-left: 0 !important; padding: 56px 12px 24px !important; }
   }
+
   button:hover { opacity: 0.88; }
   tr:hover { background-color: #f9fafb; }
   input:focus, select:focus { border-color: #1a472a; box-shadow: 0 0 0 2px rgba(26,71,42,0.1); }
   ::-webkit-scrollbar { width: 5px; height: 5px; }
   ::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 3px; }
+
+  /* Prevent zoom on input focus iOS */
+  @media (max-width: 768px) {
+    input[type="number"], input[type="text"], input[type="date"], select {
+      font-size: 16px !important;
+    }
+  }
 `;
     document.head.appendChild(css);
   }
