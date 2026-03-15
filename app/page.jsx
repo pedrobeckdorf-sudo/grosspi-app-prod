@@ -719,6 +719,89 @@ function Rounds({rounds, players, nav, year, hcp2026, isAdmin, saveRounds, allRo
   );
 }
 
+// ======== EDITABLE SCORECARD ROW (proper component — no IIFE) ========
+function EditableScorecard({ entry: e, isAdmin, round, rid, allRounds, saveRounds }) {
+  const [editScores, setEditScores] = useState(null);
+  const isEditing = editScores !== null;
+
+  const startEdit = (ev) => { ev.stopPropagation(); setEditScores(e.details.map(d => d.strokes || 0)); };
+  const cancelEdit = (ev) => { ev.stopPropagation(); setEditScores(null); };
+  const saveEdit = (ev) => {
+    ev.stopPropagation();
+    const newScores = editScores.map(s => parseInt(s)||0);
+    const updated = allRounds.map(r => r.id===rid ? {...r, scores:{...round.scores,[e.player.id]:newScores}} : r);
+    saveRounds(updated);
+    setEditScores(null);
+  };
+  const displayScores = isEditing ? editScores : e.details.map(d=>d.strokes);
+
+  return (
+    <tr>
+      <td colSpan={isAdmin ? 7 : 6} style={{padding:"0 0 8px",backgroundColor:"#f8fdf8"}}>
+        <div style={{overflowX:"auto",padding:"8px 4px"}}>
+          <table style={{...S.tbl,fontSize:11}}>
+            <thead><tr>
+              <td style={{...S.tdS,fontWeight:700,color:"#6b7280",width:52}}>Hoyo</td>
+              {COURSE.pars.map((_,j)=><td key={j} style={{...S.tdS,fontSize:10,color:"#9ca3af"}}>{j+1}</td>)}
+              <td style={{...S.tdS,fontWeight:700}}>TOT</td>
+              {isAdmin && <td style={S.tdS}></td>}
+            </tr></thead>
+            <tbody>
+              <tr>
+                <td style={{...S.tdS,fontWeight:600,color:"#6b7280"}}>Par</td>
+                {COURSE.pars.map((par,j)=><td key={j} style={S.tdS}>{par}</td>)}
+                <td style={{...S.tdS,fontWeight:700}}>{PAR_TOTAL}</td>
+                {isAdmin && <td style={S.tdS}></td>}
+              </tr>
+              <tr>
+                <td style={{...S.tdS,fontWeight:600,color:"#6b7280"}}>Golpes</td>
+                {displayScores.map((s,j)=>(
+                  <td key={j} style={{...S.tdS,padding:"3px 1px"}}>
+                    {isEditing ? (
+                      <input type="number" inputMode="numeric" min="1" max="15" value={s||""}
+                        onClick={ev=>ev.stopPropagation()}
+                        onChange={ev=>{ev.stopPropagation();const ns=[...editScores];ns[j]=ev.target.value;setEditScores(ns);}}
+                        style={{width:28,textAlign:"center",fontSize:12,fontWeight:700,padding:"2px 1px",
+                          border:"1px solid #1a472a",borderRadius:4,
+                          color:scoreColor(parseInt(s)||0,COURSE.pars[j]),backgroundColor:"#fff"}}
+                      />
+                    ) : (
+                      <span style={{color:scoreColor(s,COURSE.pars[j]),fontWeight:700,fontSize:12}}>{s||"-"}</span>
+                    )}
+                  </td>
+                ))}
+                <td style={{...S.tdS,fontWeight:700}}>
+                  {isEditing ? editScores.reduce((sum,s)=>sum+(parseInt(s)||0),0) : e.totalStrokes}
+                </td>
+                {isAdmin && (
+                  <td style={{...S.tdS,whiteSpace:"nowrap"}} onClick={ev=>ev.stopPropagation()}>
+                    {isEditing ? (
+                      <span style={{display:"flex",gap:4}}>
+                        <button onClick={saveEdit} style={{padding:"2px 7px",borderRadius:4,border:"none",backgroundColor:"#1a472a",color:"#fff",fontSize:10,fontWeight:700,cursor:"pointer"}}>✓</button>
+                        <button onClick={cancelEdit} style={{padding:"2px 7px",borderRadius:4,border:"1px solid #d1d5db",backgroundColor:"#fff",fontSize:10,cursor:"pointer"}}>✕</button>
+                      </span>
+                    ) : (
+                      <button onClick={startEdit} style={{padding:"2px 7px",borderRadius:4,border:"1px solid #d1d5db",backgroundColor:"#fff",fontSize:10,cursor:"pointer",color:"#374151"}}>✏️</button>
+                    )}
+                  </td>
+                )}
+              </tr>
+              <tr>
+                <td style={{...S.tdS,fontWeight:600,color:"#6b7280"}}>Neto</td>
+                {e.details.map((d,j)=>(
+                  <td key={j} style={{...S.tdS,fontWeight:600,color:d.netPts>=2?"#1a472a":d.netPts===1?"#6b7280":"#9ca3af"}}>{d.netPts}</td>
+                ))}
+                <td style={{...S.tdS,fontWeight:800,color:"#1a472a"}}>{e.netPts}</td>
+                {isAdmin && <td style={S.tdS}></td>}
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </td>
+    </tr>
+  );
+}
+
 // ======== ROUND DETAIL ========
 function RoundDetail({rid, rounds, players, nav, year, hcp2026, allYearRounds, isAdmin, saveRounds, allRounds}) {
   const round = rounds.find(r=>r.id===rid);
@@ -862,46 +945,15 @@ function RoundDetail({rid, rounds, players, nav, year, hcp2026, allYearRounds, i
                 </tr>
                 {/* Inline expanded scorecard */}
                 {isExpanded && (
-                  <tr key={`sc-${e.player.id}`}>
-                    <td colSpan={isAdmin ? 7 : 6} style={{padding:"0 0 8px",backgroundColor:"#f8fdf8"}}>
-                      <div style={{overflowX:"auto",padding:"8px 4px"}}>
-                        <table style={{...S.tbl,fontSize:11}}>
-                          <thead>
-                            <tr>
-                              <td style={{...S.tdS,fontWeight:700,color:"#6b7280",width:52}}>Hoyo</td>
-                              {COURSE.pars.map((_,j)=><td key={j} style={{...S.tdS,fontSize:10,color:"#9ca3af"}}>{j+1}</td>)}
-                              <td style={{...S.tdS,fontWeight:700}}>TOT</td>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            <tr>
-                              <td style={{...S.tdS,fontWeight:600,color:"#6b7280"}}>Par</td>
-                              {COURSE.pars.map((par,j)=><td key={j} style={S.tdS}>{par}</td>)}
-                              <td style={{...S.tdS,fontWeight:700}}>{PAR_TOTAL}</td>
-                            </tr>
-                            <tr>
-                              <td style={{...S.tdS,fontWeight:600,color:"#6b7280"}}>Golpes</td>
-                              {e.details.map((d,j)=>(
-                                <td key={j} style={{...S.tdS,color:scoreColor(d.strokes,d.par),fontWeight:700,fontSize:12}}>
-                                  {d.strokes||"-"}
-                                </td>
-                              ))}
-                              <td style={{...S.tdS,fontWeight:700}}>{e.totalStrokes}</td>
-                            </tr>
-                            <tr>
-                              <td style={{...S.tdS,fontWeight:600,color:"#6b7280"}}>Neto</td>
-                              {e.details.map((d,j)=>(
-                                <td key={j} style={{...S.tdS,fontWeight:600,color:d.netPts>=2?"#1a472a":d.netPts===1?"#6b7280":"#9ca3af"}}>
-                                  {d.netPts}
-                                </td>
-                              ))}
-                              <td style={{...S.tdS,fontWeight:800,color:"#1a472a"}}>{e.netPts}</td>
-                            </tr>
-                          </tbody>
-                        </table>
-                      </div>
-                    </td>
-                  </tr>
+                  <EditableScorecard
+                    key={`sc-${e.player.id}`}
+                    entry={e}
+                    isAdmin={isAdmin}
+                    round={round}
+                    rid={rid}
+                    allRounds={allRounds}
+                    saveRounds={saveRounds}
+                  />
                 )}
               </>
             );
@@ -1006,6 +1058,129 @@ function Players({rankings, nav, year, hcp2026}) {
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+// ======== HCP EVOLUTION CARD (proper component — useState here, not in IIFE) ========
+function HcpEvolutionCard({ history, handicap }) {
+  const availYears = [...new Set(history.map(h=>h.year))].sort();
+  const [hcpYearFilter, setHcpYearFilter] = useState("all");
+
+  const filteredHistory = hcpYearFilter === "all"
+    ? history
+    : history.filter(h => h.year === parseInt(hcpYearFilter));
+  const lastHcp = filteredHistory[filteredHistory.length-1]?.hcp;
+
+  return (
+    <div style={S.card}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,flexWrap:"wrap",gap:8}}>
+        <h2 style={{...S.cardTitle,margin:0}}>📉 Evolución del Handicap</h2>
+        <div style={{display:"flex",gap:5,flexWrap:"wrap",alignItems:"center"}}>
+          {hcpYearFilter === "all" && availYears.length > 1 && availYears.map(y => (
+            <span key={y} style={{display:"flex",alignItems:"center",gap:3,fontSize:11,color:"#6b7280",marginRight:2}}>
+              <span style={{width:9,height:9,borderRadius:"50%",backgroundColor:y===2025?"#1a472a":"#2563eb",display:"inline-block"}}/>
+              {y}
+            </span>
+          ))}
+          <button style={{...S.chip,fontSize:11,padding:"3px 10px",...(hcpYearFilter==="all"?{backgroundColor:"#1a472a",color:"#fff",borderColor:"#1a472a"}:{})}}
+            onClick={()=>setHcpYearFilter("all")}>Todas</button>
+          {availYears.map(y=>(
+            <button key={y} style={{...S.chip,fontSize:11,padding:"3px 10px",...(hcpYearFilter===String(y)?{backgroundColor:y===2025?"#1a472a":"#2563eb",color:"#fff",borderColor:y===2025?"#1a472a":"#2563eb"}:{})}}
+              onClick={()=>setHcpYearFilter(String(y))}>{y}</button>
+          ))}
+        </div>
+      </div>
+      <HcpChart history={filteredHistory} inicial={handicap} />
+      <div style={{display:"flex",gap:5,flexWrap:"wrap",marginTop:10}}>
+        {filteredHistory.map((h,i) => {
+          const isLast = i===filteredHistory.length-1;
+          const is25 = h.year===2025;
+          return (
+            <div key={i} style={{textAlign:"center",padding:"5px 9px",borderRadius:8,minWidth:50,
+              backgroundColor: isLast?(is25?"#1a472a":"#1d4ed8"):"#f9fafb",
+              border: isLast?"none":`1px solid ${is25?"#d1fae5":"#dbeafe"}`}}>
+              <div style={{fontSize:9,marginBottom:1,
+                color:isLast?"rgba(255,255,255,0.7)":(is25?"#6b7280":"#93c5fd"),
+                whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",maxWidth:60}}>
+                {h.roundName.split(" - ")[0]}
+              </div>
+              <div style={{fontSize:15,fontWeight:800,color:isLast?"#fff":(is25?"#1a472a":"#1d4ed8")}}>{h.hcp}</div>
+            </div>
+          );
+        })}
+      </div>
+      {hcpYearFilter==="all" && availYears.length > 1 && (
+        <div style={{fontSize:11,color:"#9ca3af",marginTop:8}}>
+          🟢 2025 · 🔵 2026 · ⭐ último HCP = <b>{lastHcp}</b>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ======== ROUND HISTORY CARD (proper component — useState here, not in IIFE) ========
+function RoundHistoryCard({ roundHistory, rounds, pid, p, year, players, hcp2026 }) {
+  const [openRound, setOpenRound] = useState(null);
+  return (
+    <div style={S.card}>
+      <h2 style={S.cardTitle}>📋 Detalle por Ronda</h2>
+      {roundHistory.map((rh, ri) => {
+        const r = rounds.find(x=>x.id===rh.rid);
+        const holes = r?.scores?.[pid] || [];
+        const hcp = year >= 2026 ? calcDynamicHcp(pid, ri, rounds, players, hcp2026) : (p.handicap||18);
+        const details = holes.map((s,i)=>({
+          strokes:s, par:COURSE.pars[i],
+          netPts: stablefordNet(s,COURSE.pars[i],hcp,COURSE.handicapIndex[i])
+        }));
+        const isOpen = openRound === rh.rid;
+        const isBest = p.best7Net.includes(rh.netPts);
+        return (
+          <div key={rh.rid} style={{borderBottom:"1px solid #f3f4f6"}}>
+            <div style={{display:"flex",alignItems:"center",padding:"10px 4px",cursor:"pointer",gap:8}}
+              onClick={()=>setOpenRound(isOpen?null:rh.rid)}>
+              <span style={{fontSize:12,color:"#9ca3af",width:14}}>{isOpen?"▼":"▶"}</span>
+              <span style={{flex:1,fontWeight:600,fontSize:13,color:"#1a472a"}}>{rh.name}</span>
+              {isBest && <span style={{fontSize:10,padding:"1px 6px",borderRadius:8,backgroundColor:"#f0f7f0",color:"#1a472a",fontWeight:700}}>⭐ Best</span>}
+              <span style={{fontSize:12,color:"#6b7280"}}>{rh.strokes} golpes</span>
+              <span style={{fontWeight:800,fontSize:15,color:"#1a472a",minWidth:28,textAlign:"right"}}>{rh.netPts} pts</span>
+            </div>
+            {isOpen && holes.length > 0 && (
+              <div style={{overflowX:"auto",paddingBottom:10,backgroundColor:"#f8fdf8",borderRadius:6,margin:"0 0 4px"}}>
+                <table style={{...S.tbl,fontSize:10,minWidth:500}}>
+                  <thead><tr>
+                    <td style={{...S.tdS,fontWeight:700,color:"#6b7280",width:48,fontSize:10}}>Hoyo</td>
+                    {COURSE.pars.map((_,j)=><td key={j} style={{...S.tdS,fontSize:10,color:"#9ca3af"}}>{j+1}</td>)}
+                    <td style={{...S.tdS,fontWeight:700,fontSize:10}}>TOT</td>
+                  </tr></thead>
+                  <tbody>
+                    <tr>
+                      <td style={{...S.tdS,fontWeight:600,color:"#6b7280",fontSize:10}}>Par</td>
+                      {COURSE.pars.map((par,j)=><td key={j} style={{...S.tdS,fontSize:10}}>{par}</td>)}
+                      <td style={{...S.tdS,fontWeight:700,fontSize:10}}>{PAR_TOTAL}</td>
+                    </tr>
+                    <tr>
+                      <td style={{...S.tdS,fontWeight:600,color:"#6b7280",fontSize:10}}>Golpes</td>
+                      {details.map((d,j)=>(
+                        <td key={j} style={{...S.tdS,color:scoreColor(d.strokes,d.par),fontWeight:700,fontSize:11}}>{d.strokes||"-"}</td>
+                      ))}
+                      <td style={{...S.tdS,fontWeight:700,fontSize:10}}>{rh.strokes}</td>
+                    </tr>
+                    <tr>
+                      <td style={{...S.tdS,fontWeight:600,color:"#6b7280",fontSize:10}}>Neto</td>
+                      {details.map((d,j)=>(
+                        <td key={j} style={{...S.tdS,fontSize:10,fontWeight:600,
+                          color:d.netPts>=2?"#1a472a":d.netPts===1?"#6b7280":"#9ca3af"}}>{d.netPts}</td>
+                      ))}
+                      <td style={{...S.tdS,fontWeight:800,color:"#1a472a",fontSize:11}}>{rh.netPts}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -1116,62 +1291,10 @@ function PlayerDetail({pid, rankings, rounds, allRounds, nav, year, hcp2026, pla
         <div style={S.kpi}><div style={{...S.kpiVal,color:"#b8860b"}}>{p.currentHcp ?? hcpInicial}</div><div style={S.kpiLbl}>HCP Actual ★</div></div>
       </div>
 
-      {/* HCP Evolution — with own year filter */}
-      {fullHcpHistory.length > 0 && (() => {
-        const availYears = [...new Set(fullHcpHistory.map(h=>h.year))].sort();
-        const [hcpYearFilter, setHcpYearFilter] = useState("all");
-        const filteredHistory = hcpYearFilter === "all"
-          ? fullHcpHistory
-          : fullHcpHistory.filter(h => h.year === parseInt(hcpYearFilter));
-        const lastHcp = filteredHistory[filteredHistory.length-1]?.hcp;
-        return (
-          <div style={S.card}>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,flexWrap:"wrap",gap:8}}>
-              <h2 style={{...S.cardTitle,margin:0}}>📉 Evolución del Handicap</h2>
-              <div style={{display:"flex",gap:5,flexWrap:"wrap",alignItems:"center"}}>
-                {/* Legend */}
-                {hcpYearFilter === "all" && availYears.length > 1 && availYears.map(y => (
-                  <span key={y} style={{display:"flex",alignItems:"center",gap:3,fontSize:11,color:"#6b7280",marginRight:4}}>
-                    <span style={{width:10,height:10,borderRadius:"50%",backgroundColor:y===2025?"#1a472a":"#2563eb",display:"inline-block"}}/>
-                    {y}
-                  </span>
-                ))}
-                {/* Filter buttons */}
-                <button style={{...S.chip,fontSize:11,padding:"3px 10px",...(hcpYearFilter==="all"?{backgroundColor:"#1a472a",color:"#fff",borderColor:"#1a472a"}:{})}}
-                  onClick={()=>setHcpYearFilter("all")}>Todas</button>
-                {availYears.map(y=>(
-                  <button key={y} style={{...S.chip,fontSize:11,padding:"3px 10px",...(hcpYearFilter===String(y)?{backgroundColor:y===2025?"#1a472a":"#2563eb",color:"#fff",borderColor:y===2025?"#1a472a":"#2563eb"}:{})}}
-                    onClick={()=>setHcpYearFilter(String(y))}>{y}</button>
-                ))}
-              </div>
-            </div>
-            <HcpChart history={filteredHistory} inicial={p.handicap} />
-            <div style={{display:"flex",gap:5,flexWrap:"wrap",marginTop:10}}>
-              {filteredHistory.map((h,i) => {
-                const isLast = i===filteredHistory.length-1;
-                const yr2025 = h.year===2025;
-                return (
-                  <div key={i} style={{
-                    textAlign:"center",padding:"5px 9px",borderRadius:8,minWidth:50,
-                    backgroundColor: isLast ? (yr2025?"#1a472a":"#1d4ed8") : "#f9fafb",
-                    border: isLast ? "none" : `1px solid ${yr2025?"#d1fae5":"#dbeafe"}`
-                  }}>
-                    <div style={{fontSize:9,marginBottom:1,color:isLast?"rgba(255,255,255,0.7)":(yr2025?"#6b7280":"#93c5fd"),whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",maxWidth:60}}>
-                      {h.roundName.split(" - ")[0]}
-                    </div>
-                    <div style={{fontSize:15,fontWeight:800,color:isLast?"#fff":(yr2025?"#1a472a":"#1d4ed8")}}>{h.hcp}</div>
-                  </div>
-                );
-              })}
-            </div>
-            {hcpYearFilter==="all" && availYears.length > 1 && (
-              <div style={{fontSize:11,color:"#9ca3af",marginTop:8}}>
-                🟢 2025 · 🔵 2026 · ⭐ último HCP = <b>{lastHcp}</b>
-              </div>
-            )}
-          </div>
-        );
-      })()}
+      {/* HCP Evolution — proper subcomponent to avoid hooks-in-IIFE bug */}
+      {fullHcpHistory.length > 0 && (
+        <HcpEvolutionCard history={fullHcpHistory} handicap={p.handicap} />
+      )}
 
       {/* Monthly breakdown */}
       <div style={S.card}>
@@ -1208,6 +1331,11 @@ function PlayerDetail({pid, rankings, rounds, allRounds, nav, year, hcp2026, pla
           </tr>
         </tbody></table></div>
       </div>
+
+      {/* Round by Round detail */}
+      {stats.roundHistory.length > 0 && (
+        <RoundHistoryCard roundHistory={stats.roundHistory} rounds={rounds} pid={pid} p={p} year={year} players={players} hcp2026={hcp2026} />
+      )}
 
       {/* Score Distribution */}
       <div style={S.card}>
