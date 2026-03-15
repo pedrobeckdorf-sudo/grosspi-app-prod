@@ -1217,6 +1217,12 @@ function PlayerDetail({pid, rankings, rounds, allRounds, nav, year, hcp2026, pla
       const hcp = get2025HcpLocal(r.name);
       if (hcp !== null) history.push({ roundName: r.name, hcp, date: r.date, year: 2025 });
     });
+    // 2026+: add initial HCP as anchor point even if no rounds played
+    const hcp2026Inicial = hcp2026[pid]?.inicial ?? p.handicap;
+    const has2026Rounds = rounds2026plus.some(r => r.scores?.[pid]);
+    if (!has2026Rounds && hcp2026Inicial != null) {
+      history.push({ roundName: "Inicial 2026", hcp: hcp2026Inicial, date: "2026-01-01", year: 2026 });
+    }
     rounds2026plus.forEach((r, rIdx) => {
       if (!r.scores?.[pid]) return;
       const hcp = calcDynamicHcp(pid, rIdx, rounds2026plus, players, hcp2026);
