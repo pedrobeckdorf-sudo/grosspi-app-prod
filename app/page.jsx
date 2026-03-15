@@ -1956,12 +1956,42 @@ function Stats({ allRounds, players, rankings, year, hcp2026, availableYears }) 
     return allRounds.filter(r => roundYear(r) === parseInt(statsYear));
   }, [allRounds, statsYear]);
 
-  // For "Todos", need combined rankings across all rounds
+  // Compute rankings based on statsYear (independent of menu year)
   const effectiveRankings = useMemo(() => {
-    if (statsYear !== "all") return rankings;
-    // Recompute rankings using all rounds combined
-    return computeRankingsFromRounds(players, allRounds, parseInt(availableYears[availableYears.length-1]), hcp2026);
-  }, [statsYear, rankings, allRounds, players, hcp2026, availableYears]);
+    if (statsYear === "all") {
+      // All rounds combined — use latest year for HCP calc
+      return computeRankingsFromRounds(players, allRounds, Math.max(...availableYears), hcp2026);
+    }
+    const yr = parseInt(statsYear);
+    if (yr === 2025) {
+      // Use pre-computed 2025 annual data (same as App does for year===2025)
+      return players.map(p => {
+        const a = INIT_DATA.annual2025[p.id];
+        const netVals = a?.netPts ? Object.values(a.netPts) : [];
+        const grossVals = a?.grossPts ? Object.values(a.grossPts) : [];
+        const { total: totalNet, best7: best7Net } = rankingScore(netVals);
+        const { total: totalGross, best7: best7Gross } = rankingScore(grossVals);
+        return {
+          ...p,
+          totalNet, totalGross,
+          totalNetAll: a?.totalNet || 0,
+          totalGrossAll: a?.totalGross || 0,
+          tarjetas: a?.numTarjetas || 0,
+          best7Net, best7Gross,
+          avgNet: best7Net.length > 0 ? totalNet / best7Net.length : 0,
+          avgGross: best7Gross.length > 0 ? totalGross / best7Gross.length : 0,
+          netByMonth: a?.netPts || {},
+          grossByMonth: a?.grossPts || {},
+          strokesByMonth: a?.strokes || {},
+          hcpHistory: [],
+          currentHcp: null,
+        };
+      }).sort(tiebreaker);
+    }
+    // 2026+
+    const yearRounds = allRounds.filter(r => roundYear(r) === yr);
+    return computeRankingsFromRounds(players, yearRounds, yr, hcp2026);
+  }, [statsYear, allRounds, players, hcp2026, availableYears]);
 
   // Build HCP history per round (sorted by date)
   const sortedRounds = useMemo(() =>
@@ -2107,7 +2137,10 @@ function Stats({ allRounds, players, rankings, year, hcp2026, availableYears }) 
       {tab==="hcp" && (
         <div style={S.card}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,flexWrap:"wrap",gap:8}}>
-            <h2 style={{...S.cardTitle,margin:0}}>📉 Evolución del Handicap</h2>
+            <div>
+              <h2 style={{...S.cardTitle,margin:0}}>📉 Evolución del Handicap</h2>
+              <div style={{fontSize:10,color:"#9ca3af",marginTop:2}}>HCP mostrado = el que se usó para jugar esa ronda (calculado con rondas anteriores)</div>
+            </div>
             <select style={{...S.input,width:"auto",minWidth:160}}
               value={selPlayer} onChange={e=>setSelPlayer(e.target.value)}>
               <option value="all">Promedio todos</option>
@@ -2121,21 +2154,45 @@ function Stats({ allRounds, players, rankings, year, hcp2026, availableYears }) 
           ) : (
             <>
               <HcpChart history={selectedPlayerData} inicial={selectedPlayerInicial} />
-              <div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:12}}>
-                {selectedPlayerData.map((h,i) => {
-                  const isLast = i===selectedPlayerData.length-1;
-                  return (
-                    <div key={i} style={{textAlign:"center",padding:"6px 10px",borderRadius:8,minWidth:55,
-                      backgroundColor:isLast?"#1a472a":"#f9fafb",
-                      border:isLast?"none":"1px solid #e5e7eb"}}>
-                      <div style={{fontSize:9,color:isLast?"#86efac":"#9ca3af",marginBottom:1}}>
-                        {h.roundName.split(" - ")[0]}
-                      </div>
-                      <div style={{fontSize:16,fontWeight:800,color:isLast?"#fff":"#1a472a"}}>{h.hcp}</div>
-                    </div>
-                  );
-                })}
-              </div>
+              {/* Timeline with year separators */}
+              {(() => {
+                const years = selectedPlayerData.map(h => h.year || 2025);
+                const yearChanges = [];
+                for (let i=1; i<years.length; i++) { if (years[i]!==years[i-1]) yearChanges.push(i); }
+                return (
+                  <div style={{display:"flex",gap:4,flexWrap:"wrap",marginTop:10,alignItems:"center"}}>
+                    {selectedPlayerData.map((h,i) => {
+                      const isLast = i===selectedPlayerData.length-1;
+                      const isNewYear = yearChanges.includes(i);
+                      const is25 = (h.year||2025)===2025;
+                      const isInicial = h.roundName === "Inicial 2026";
+                      return (
+                        <React.Fragment key={i}>
+                          {isNewYear && (
+                            <div style={{display:"flex",alignItems:"center",gap:3}}>
+                              <div style={{width:1,height:36,backgroundColor:"#d1d5db"}}/>
+                              <span style={{fontSize:9,color:"#6b7280",fontWeight:700,writingMode:"horizontal-tb"}}>{h.year}</span>
+                            </div>
+                          )}
+                          <div style={{textAlign:"center",padding:"5px 8px",borderRadius:8,minWidth:50,
+                            backgroundColor: isLast?(is25?"#1a472a":"#1d4ed8"):isInicial?"#dbeafe":"#f9fafb",
+                            border: isLast?"none":isInicial?"2px dashed #2563eb":`1px solid ${is25?"#e5e7eb":"#dbeafe"}`}}>
+                            <div style={{fontSize:9,marginBottom:1,
+                              color:isLast?"rgba(255,255,255,0.7)":isInicial?"#1d4ed8":(is25?"#9ca3af":"#93c5fd"),
+                              whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",maxWidth:58}}>
+                              {h.roundName.split(" - ")[0]}
+                            </div>
+                            <div style={{fontSize:15,fontWeight:800,
+                              color:isLast?"#fff":isInicial?"#1d4ed8":(is25?"#1a472a":"#1d4ed8")}}>
+                              {h.hcp}
+                            </div>
+                          </div>
+                        </React.Fragment>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
               {selPlayer==="all" && (
                 <p style={{fontSize:11,color:"#9ca3af",marginTop:8}}>Promedio del HCP de todos los jugadores que participaron en cada ronda</p>
               )}
