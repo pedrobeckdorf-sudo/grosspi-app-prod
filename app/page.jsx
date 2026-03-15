@@ -192,7 +192,7 @@ function lsSet(key, val) {
 const DB = { players: "grosspi/players", rounds: "grosspi/rounds", hcp2026: "grosspi/hcp2026" };
 const LS = { role: "grosspi:role" };
 
-const ADMIN_PIN = "grosspi2026";
+const ADMIN_PIN = "Sbv1240";
 
 // ======== LOGIN SCREEN ========
 function LoginScreen({ onLogin }) {
