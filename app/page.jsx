@@ -2117,21 +2117,19 @@ function Stats({ allRounds, players, rankings, year, hcp2026, availableYears }) 
         ))}
       </div>
 
-      {/* Year selector — only for Performance and Ranking tabs */}
-      {tab !== "hcp" && (
-        <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:16}}>
-          <button
-            style={{...S.chip,fontSize:12,...(statsYear==="all"?{backgroundColor:"#1a472a",color:"#fff",borderColor:"#1a472a"}:{})}}
-            onClick={()=>setStatsYear("all")}
-          >Todas</button>
-          {availableYears.map(y => (
-            <button key={y}
-              style={{...S.chip,fontSize:12,...(statsYear===String(y)?{backgroundColor:"#1a472a",color:"#fff",borderColor:"#1a472a"}:{})}}
-              onClick={()=>setStatsYear(String(y))}
-            >{y}</button>
-          ))}
-        </div>
-      )}
+      {/* Year selector — all tabs */}
+      <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:16}}>
+        <button
+          style={{...S.chip,fontSize:12,...(statsYear==="all"?{backgroundColor:"#1a472a",color:"#fff",borderColor:"#1a472a"}:{})}}
+          onClick={()=>setStatsYear("all")}
+        >Todas</button>
+        {availableYears.map(y => (
+          <button key={y}
+            style={{...S.chip,fontSize:12,...(statsYear===String(y)?{backgroundColor:"#1a472a",color:"#fff",borderColor:"#1a472a"}:{})}}
+            onClick={()=>setStatsYear(String(y))}
+          >{y}</button>
+        ))}
+      </div>
 
       {/* ── HCP Medio ── */}
       {tab==="hcp" && (
