@@ -544,9 +544,9 @@ export default function App() {
         {view==="rounds" && <Rounds rounds={yearRounds} players={players} nav={nav} year={year} hcp2026={hcp2026} isAdmin={isAdmin} saveRounds={saveRounds} allRounds={rounds} />}
         {view==="round-detail" && <RoundDetail rid={selRound} rounds={rounds} players={players} nav={nav} year={year} hcp2026={hcp2026} allYearRounds={yearRounds} isAdmin={isAdmin} saveRounds={saveRounds} allRounds={rounds} />}
         {view==="players" && <Players rankings={rankings} nav={nav} year={year} hcp2026={hcp2026} />}
-        {view==="player-detail" && <PlayerDetail pid={selPlayer} rankings={rankings} rounds={yearRounds} nav={nav} year={year} hcp2026={hcp2026} players={players} />}
+        {view==="player-detail" && <PlayerDetail pid={selPlayer} rankings={rankings} rounds={yearRounds} allRounds={rounds} nav={nav} year={year} hcp2026={hcp2026} players={players} />}
         {view==="stats" && <Stats allRounds={rounds} players={players} rankings={rankings} year={year} hcp2026={hcp2026} availableYears={availableYears} />}
-        {view==="compare" && <Compare rankings={rankings} cmpIds={cmpIds} setCmpIds={setCmpIds} rounds={yearRounds} />}
+        {view==="compare" && <Compare rankings={rankings} cmpIds={cmpIds} setCmpIds={setCmpIds} rounds={yearRounds} allRounds={rounds} players={players} hcp2026={hcp2026} />}
         {view==="manual" && isAdmin && <ManualEntry players={players} allRounds={rounds} yearRounds={yearRounds} saveRounds={saveRounds} nav={nav} />}
         {view==="manual" && !isAdmin && <div style={S.empty}>🔒 Acceso restringido a administradores</div>}
         {view==="reglamento" && <Reglamento hcp2026={hcp2026} saveHcp2026={saveHcp2026} isAdmin={isAdmin} />}
@@ -967,18 +967,51 @@ function Players({rankings, nav, year, hcp2026}) {
 }
 
 // ======== PLAYER DETAIL ========
-function PlayerDetail({pid, rankings, rounds, nav, year, hcp2026, players}) {
+function PlayerDetail({pid, rankings, rounds, allRounds, nav, year, hcp2026, players}) {
   const p = rankings.find(x=>x.id===pid);
   if (!p) return <div style={S.empty}>Jugador no encontrado</div>;
   const hcpInicial = year >= 2026 ? (hcp2026[pid]?.inicial ?? p.handicap) : p.handicap;
 
-  // Compute hole-by-hole stats from all rounds
+  // All rounds sorted chronologically across all years
+  const allSorted = useMemo(() =>
+    [...(allRounds||rounds)].sort((a,b) => new Date(a.date||0)-new Date(b.date||0)),
+  [allRounds, rounds]);
+
+  // monthMap helper for 2025 HCP
+  const monthMap = {"Marzo":"Mar","Abril":"Abr","Mayo":"May","Junio":"Jun","Julio":"Jul","Agosto":"Ago","Septiembre":"Sep","Octubre":"Oct","Noviembre":"Nov","Diciembre":"Dic","Adicional 1":"Adic 1","Adicional 2":"Adic 2"};
+  const get2025HcpLocal = (roundName) => {
+    const gb = p.grossByMonth || {};
+    if (gb[roundName] != null) return 36 - gb[roundName];
+    for (const [full,abbr] of Object.entries(monthMap)) {
+      if (roundName.includes(full)||roundName.includes(abbr)) { if(gb[abbr]!=null) return 36-gb[abbr]; }
+    }
+    if (roundName.includes("Adic")) { const n=roundName.includes("2")?"Adic 2":"Adic 1"; if(gb[n]!=null) return 36-gb[n]; }
+    return null;
+  };
+
+  // Full HCP history across ALL years
+  const fullHcpHistory = useMemo(() => {
+    const history = [];
+    const rounds2025 = allSorted.filter(r => roundYear(r) === 2025 && r.scores?.[pid]);
+    const rounds2026plus = allSorted.filter(r => roundYear(r) >= 2026);
+    rounds2025.forEach(r => {
+      const hcp = get2025HcpLocal(r.name);
+      if (hcp !== null) history.push({ roundName: r.name, hcp, date: r.date });
+    });
+    rounds2026plus.forEach((r, rIdx) => {
+      if (!r.scores?.[pid]) return;
+      const hcp = calcDynamicHcp(pid, rIdx, rounds2026plus, players, hcp2026);
+      history.push({ roundName: r.name, hcp, date: r.date });
+    });
+    return history;
+  }, [allSorted, pid, p, hcp2026, players]);
+
+  // Compute hole-by-hole stats from year rounds
   const stats = useMemo(() => {
     let birdies=0, pars=0, bogeys=0, doubles=0, eagles=0, holesPlayed=0;
     const holeAvg = Array(18).fill(0);
     const holeCounts = Array(18).fill(0);
     const roundHistory = [];
-
     rounds.forEach((r, rIdx) => {
       if (!r.scores?.[pid]) return;
       const holes = r.scores[pid];
@@ -1000,11 +1033,9 @@ function PlayerDetail({pid, rankings, rounds, nav, year, hcp2026, players}) {
       });
       roundHistory.push({date:r.date, name:r.name, netPts:rNet, grossPts:rGross, strokes:rStrokes, rid:r.id});
     });
-
     return {birdies, pars, bogeys, doubles, eagles, holesPlayed,
       holeAverages: holeAvg.map((s,i) => holeCounts[i] ? s/holeCounts[i] : 0),
-      roundHistory,
-      hcpHistory: p.hcpHistory || []};
+      roundHistory};
   }, [pid, p, rounds]);
 
   const months = Object.keys(p.netByMonth || {});
@@ -1041,20 +1072,20 @@ function PlayerDetail({pid, rankings, rounds, nav, year, hcp2026, players}) {
         <div style={S.kpi}><div style={{...S.kpiVal,color:"#b8860b"}}>{p.currentHcp ?? hcpInicial}</div><div style={S.kpiLbl}>HCP Actual ★</div></div>
       </div>
 
-      {/* HCP Evolution */}
-      {stats.hcpHistory.length > 0 && (
+      {/* HCP Evolution — all years */}
+      {fullHcpHistory.length > 0 && (
         <div style={S.card}>
-          <h2 style={S.cardTitle}>📉 Evolución del Handicap</h2>
-          <HcpChart history={stats.hcpHistory} inicial={hcpInicial} />
+          <h2 style={S.cardTitle}>📉 Evolución del Handicap (2025–{new Date().getFullYear()})</h2>
+          <HcpChart history={fullHcpHistory} inicial={p.handicap} />
           <div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:12}}>
-            {stats.hcpHistory.map((h,i) => (
+            {fullHcpHistory.map((h,i) => (
               <div key={i} style={{
-                textAlign:"center",padding:"6px 10px",borderRadius:8,minWidth:60,
-                backgroundColor: i===stats.hcpHistory.length-1 ? "#1a472a" : "#f9fafb",
-                border: i===stats.hcpHistory.length-1 ? "none" : "1px solid #e5e7eb"
+                textAlign:"center",padding:"6px 10px",borderRadius:8,minWidth:55,
+                backgroundColor: i===fullHcpHistory.length-1 ? "#1a472a" : "#f9fafb",
+                border: i===fullHcpHistory.length-1 ? "none" : "1px solid #e5e7eb"
               }}>
-                <div style={{fontSize:10,color:i===stats.hcpHistory.length-1?"#86efac":"#9ca3af",marginBottom:2,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",maxWidth:70}}>{h.roundName.replace("T","T").split(" - ")[0]}</div>
-                <div style={{fontSize:16,fontWeight:800,color:i===stats.hcpHistory.length-1?"#fff":"#1a472a"}}>{h.hcp}</div>
+                <div style={{fontSize:9,color:i===fullHcpHistory.length-1?"#86efac":"#9ca3af",marginBottom:2,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",maxWidth:65}}>{h.roundName.split(" - ")[0]}</div>
+                <div style={{fontSize:16,fontWeight:800,color:i===fullHcpHistory.length-1?"#fff":"#1a472a"}}>{h.hcp}</div>
               </div>
             ))}
           </div>
@@ -1131,25 +1162,165 @@ function PlayerDetail({pid, rankings, rounds, nav, year, hcp2026, players}) {
 }
 
 // ======== COMPARE ========
-function Compare({rankings, cmpIds, setCmpIds, rounds}) {
+function Compare({rankings, cmpIds, setCmpIds, rounds, allRounds, players, hcp2026}) {
   const colors = ["#22c55e","#3b82f6","#eab308","#ef4444"];
   const toggle = pid => {
     if (cmpIds.includes(pid)) setCmpIds(cmpIds.filter(x=>x!==pid));
     else if (cmpIds.length < 4) setCmpIds([...cmpIds, pid]);
   };
 
-  const compared = cmpIds.map((pid,ci) => {
+  // Sorted rounds for charts
+  const sortedRounds = useMemo(() =>
+    [...rounds].sort((a,b) => new Date(a.date||0)-new Date(b.date||0)),
+  [rounds]);
+
+  // All rounds sorted for full HCP history
+  const allSorted = useMemo(() =>
+    [...(allRounds||rounds)].sort((a,b) => new Date(a.date||0)-new Date(b.date||0)),
+  [allRounds, rounds]);
+
+  const monthMap = {"Marzo":"Mar","Abril":"Abr","Mayo":"May","Junio":"Jun","Julio":"Jul","Agosto":"Ago","Septiembre":"Sep","Octubre":"Oct","Noviembre":"Nov","Diciembre":"Dic","Adicional 1":"Adic 1","Adicional 2":"Adic 2"};
+
+  const compared = useMemo(() => cmpIds.map((pid,ci) => {
     const p = rankings.find(x=>x.id===pid);
     if (!p) return null;
-    // Compute hole averages
+    // Hole averages
     const holeAvg = Array(18).fill(0);
     const holeCounts = Array(18).fill(0);
     rounds.forEach(r => {
       if (!r.scores?.[pid]) return;
       r.scores[pid].forEach((s,i) => { if (s>0) { holeAvg[i]+=s; holeCounts[i]++; } });
     });
-    return {...p, color:colors[ci], holeAverages:holeAvg.map((s,i)=>holeCounts[i]?s/holeCounts[i]:0)};
-  }).filter(Boolean);
+
+    // Accumulated net points per round (chronological)
+    let cumPts = 0;
+    const ptsPerRound = sortedRounds
+      .filter(r => r.scores?.[pid])
+      .map(r => {
+        let net = 0;
+        const rIdx = sortedRounds.indexOf(r);
+        const hcp = roundYear(r) >= 2026
+          ? calcDynamicHcp(pid, rIdx, sortedRounds.filter(x=>roundYear(x)>=2026), players, hcp2026)
+          : (p.handicap||18);
+        r.scores[pid].forEach((s,i) => { net += stablefordNet(s, COURSE.pars[i], hcp, COURSE.handicapIndex[i]); });
+        cumPts += net;
+        return { roundName: r.name, pts: net, cumPts };
+      });
+
+    // Full HCP history across all years
+    const hcpHistory = [];
+    const r2025 = allSorted.filter(r => roundYear(r)===2025 && r.scores?.[pid]);
+    const r2026 = allSorted.filter(r => roundYear(r)>=2026);
+    r2025.forEach(r => {
+      const gb = p.grossByMonth||{};
+      let hcp = null;
+      if (gb[r.name]!=null) hcp = 36-gb[r.name];
+      else for (const [full,abbr] of Object.entries(monthMap)) {
+        if ((r.name.includes(full)||r.name.includes(abbr)) && gb[abbr]!=null) { hcp=36-gb[abbr]; break; }
+      }
+      if (hcp!==null) hcpHistory.push({roundName:r.name, hcp});
+    });
+    r2026.forEach((r,rIdx) => {
+      if (!r.scores?.[pid]) return;
+      hcpHistory.push({roundName:r.name, hcp:calcDynamicHcp(pid,rIdx,r2026,players,hcp2026)});
+    });
+
+    return {...p, color:colors[ci], holeAverages:holeAvg.map((s,i)=>holeCounts[i]?s/holeCounts[i]:0), ptsPerRound, hcpHistory};
+  }).filter(Boolean), [cmpIds, rankings, rounds, sortedRounds, allSorted, players, hcp2026]);
+
+  // All round labels for points chart
+  const allRoundLabels = useMemo(() =>
+    sortedRounds.map(r => r.name.split(" - ")[0]),
+  [sortedRounds]);
+
+  // SVG points chart
+  const PointsChart = () => {
+    if (!compared.length || !sortedRounds.length) return null;
+    const W=500, H=120, PAD=10;
+    const maxPts = Math.max(...compared.flatMap(c=>c.ptsPerRound.map(x=>x.cumPts)), 1);
+    const xStep = (W-PAD*2) / Math.max(sortedRounds.length-1, 1);
+    const yScale = v => PAD + ((maxPts-v)/(maxPts||1))*(H-PAD*2);
+    return (
+      <div style={{overflowX:"auto"}}>
+        <svg viewBox={`0 0 ${W} ${H}`} style={{width:"100%",minWidth:320,height:H}}>
+          {compared.map(c => {
+            const pts = c.ptsPerRound;
+            if (!pts.length) return null;
+            const points = pts.map(({roundName, cumPts}) => {
+              const rIdx = sortedRounds.findIndex(r=>r.name===roundName);
+              return `${PAD+rIdx*xStep},${yScale(cumPts)}`;
+            }).join(" ");
+            return (
+              <g key={c.id}>
+                <polyline points={points} fill="none" stroke={c.color} strokeWidth="2" strokeLinejoin="round" />
+                {pts.map(({roundName,cumPts},i) => {
+                  const rIdx = sortedRounds.findIndex(r=>r.name===roundName);
+                  const isLast = i===pts.length-1;
+                  return (
+                    <g key={i}>
+                      <circle cx={PAD+rIdx*xStep} cy={yScale(cumPts)} r={isLast?5:3} fill={c.color} stroke="#fff" strokeWidth="1.5"/>
+                      {isLast && <text x={PAD+rIdx*xStep+6} y={yScale(cumPts)+4} fontSize="9" fill={c.color} fontWeight="bold">{cumPts}</text>}
+                    </g>
+                  );
+                })}
+              </g>
+            );
+          })}
+          {/* X axis labels */}
+          {sortedRounds.map((r,i) => (
+            <text key={i} x={PAD+i*xStep} y={H-1} textAnchor="middle" fontSize="8" fill="#9ca3af">
+              {r.name.split(" - ")[0]}
+            </text>
+          ))}
+        </svg>
+      </div>
+    );
+  };
+
+  // SVG HCP chart for compare
+  const HcpCompareChart = () => {
+    if (!compared.length) return null;
+    const allHcps = compared.flatMap(c=>c.hcpHistory.map(h=>h.hcp));
+    if (!allHcps.length) return null;
+    const W=500, H=100, PAD=10;
+    const allLabels = [...new Set(compared.flatMap(c=>c.hcpHistory.map(h=>h.roundName)))];
+    const min=Math.max(0,Math.min(...allHcps)-2), max=Math.max(...allHcps)+2;
+    const xStep=(W-PAD*2)/Math.max(allLabels.length-1,1);
+    const yScale=v=>PAD+((max-v)/(max-min||1))*(H-PAD*2);
+    return (
+      <div style={{overflowX:"auto"}}>
+        <svg viewBox={`0 0 ${W} ${H}`} style={{width:"100%",minWidth:320,height:H}}>
+          {compared.map(c => {
+            if (!c.hcpHistory.length) return null;
+            const pts = c.hcpHistory.map(({roundName,hcp})=>{
+              const idx=allLabels.indexOf(roundName);
+              return `${PAD+idx*xStep},${yScale(hcp)}`;
+            }).join(" ");
+            return (
+              <g key={c.id}>
+                <polyline points={pts} fill="none" stroke={c.color} strokeWidth="2" strokeLinejoin="round"/>
+                {c.hcpHistory.map(({roundName,hcp},i)=>{
+                  const idx=allLabels.indexOf(roundName);
+                  const isLast=i===c.hcpHistory.length-1;
+                  return (
+                    <g key={i}>
+                      <circle cx={PAD+idx*xStep} cy={yScale(hcp)} r={isLast?5:3} fill={c.color} stroke="#fff" strokeWidth="1.5"/>
+                      {isLast && <text x={PAD+idx*xStep+6} y={yScale(hcp)+4} fontSize="9" fill={c.color} fontWeight="bold">{hcp}</text>}
+                    </g>
+                  );
+                })}
+              </g>
+            );
+          })}
+          {allLabels.map((l,i)=>(
+            <text key={i} x={PAD+i*xStep} y={H-1} textAnchor="middle" fontSize="8" fill="#9ca3af">
+              {l.split(" - ")[0]}
+            </text>
+          ))}
+        </svg>
+      </div>
+    );
+  };
 
   return (
     <div style={S.view}>
@@ -1166,17 +1337,58 @@ function Compare({rankings, cmpIds, setCmpIds, rounds}) {
 
       {compared.length >= 2 && (
         <>
+          {/* Points accumulated per round */}
+          <div style={S.card}>
+            <div style={{display:"flex",gap:12,flexWrap:"wrap",marginBottom:10,alignItems:"center"}}>
+              <h2 style={{...S.cardTitle,margin:0}}>📈 Puntos Netos Acumulados por Ronda</h2>
+              <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+                {compared.map(c=>(
+                  <div key={c.id} style={{display:"flex",alignItems:"center",gap:5,fontSize:12}}>
+                    <div style={{width:12,height:3,borderRadius:2,backgroundColor:c.color}}/>
+                    <span style={{color:c.color,fontWeight:600}}>{c.name.split(" ")[0]}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <PointsChart />
+          </div>
+
+          {/* HCP evolution comparison */}
+          <div style={S.card}>
+            <div style={{display:"flex",gap:12,flexWrap:"wrap",marginBottom:10,alignItems:"center"}}>
+              <h2 style={{...S.cardTitle,margin:0}}>📉 Evolución HCP</h2>
+              <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+                {compared.map(c=>(
+                  <div key={c.id} style={{display:"flex",alignItems:"center",gap:5,fontSize:12}}>
+                    <div style={{width:12,height:3,borderRadius:2,backgroundColor:c.color}}/>
+                    <span style={{color:c.color,fontWeight:600}}>{c.name.split(" ")[0]}: {c.hcpHistory[c.hcpHistory.length-1]?.hcp ?? c.handicap}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <HcpCompareChart />
+          </div>
+
+          {/* Stats table */}
           <div style={S.card}>
             <h2 style={S.cardTitle}>Estadísticas</h2>
             <div style={S.tblWrap}><table style={S.tbl}><thead><tr>
               <th style={{...S.th,textAlign:"left"}}>Métrica</th>
               {compared.map(c=><th key={c.id} style={{...S.th,color:c.color}}>{c.name.split(" ")[0]}</th>)}
             </tr></thead><tbody>
-              {[{l:"HCP",f:c=>c.handicap},{l:"Tarjetas",f:c=>c.tarjetas},{l:"Best 7 Neto",f:c=>c.totalNet},{l:"Best 7 Gross",f:c=>c.totalGross},{l:"Prom Neto (7)",f:c=>c.avgNet?.toFixed(1)},{l:"Prom Gross (7)",f:c=>c.avgGross?.toFixed(1)}].map(row=>(
+              {[
+                {l:"HCP Actual★",f:c=>c.currentHcp??c.handicap},
+                {l:"Tarjetas",f:c=>c.tarjetas},
+                {l:"Pts Ranking",f:c=>c.totalNet},
+                {l:"Prom Neto",f:c=>c.avgNet?.toFixed(1)},
+                {l:"Prom Gross",f:c=>c.avgGross?.toFixed(1)},
+              ].map(row=>(
                 <tr key={row.l} style={S.tr}><td style={{...S.td,textAlign:"left",fontWeight:600}}>{row.l}</td>{compared.map(c=><td key={c.id} style={S.td}>{row.f(c)}</td>)}</tr>
               ))}
             </tbody></table></div>
           </div>
+
+          {/* Hole averages table */}
           <div style={S.card}>
             <h2 style={S.cardTitle}>Promedio por Hoyo</h2>
             <div style={S.tblWrap}><table style={S.tbl}><thead><tr>
@@ -1456,7 +1668,7 @@ function Stats({ allRounds, players, rankings, year, hcp2026, availableYears }) 
   const [tab, setTab] = useState("hcp");
   const [selPlayer, setSelPlayer] = useState("all");
   const [perfPlayer, setPerfPlayer] = useState("all");
-  const [statsYear, setStatsYear] = useState(String(year)); // "2025", "2026", "all"
+  const [statsYear, setStatsYear] = useState("all"); // default all years for HCP evolution
 
   // Filter rounds by selected statsYear
   const rounds = useMemo(() => {
