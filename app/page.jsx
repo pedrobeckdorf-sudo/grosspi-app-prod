@@ -996,12 +996,12 @@ function PlayerDetail({pid, rankings, rounds, allRounds, nav, year, hcp2026, pla
     const rounds2026plus = allSorted.filter(r => roundYear(r) >= 2026);
     rounds2025.forEach(r => {
       const hcp = get2025HcpLocal(r.name);
-      if (hcp !== null) history.push({ roundName: r.name, hcp, date: r.date });
+      if (hcp !== null) history.push({ roundName: r.name, hcp, date: r.date, year: 2025 });
     });
     rounds2026plus.forEach((r, rIdx) => {
       if (!r.scores?.[pid]) return;
       const hcp = calcDynamicHcp(pid, rIdx, rounds2026plus, players, hcp2026);
-      history.push({ roundName: r.name, hcp, date: r.date });
+      history.push({ roundName: r.name, hcp, date: r.date, year: roundYear(r) });
     });
     return history;
   }, [allSorted, pid, p, hcp2026, players]);
@@ -1072,25 +1072,62 @@ function PlayerDetail({pid, rankings, rounds, allRounds, nav, year, hcp2026, pla
         <div style={S.kpi}><div style={{...S.kpiVal,color:"#b8860b"}}>{p.currentHcp ?? hcpInicial}</div><div style={S.kpiLbl}>HCP Actual ★</div></div>
       </div>
 
-      {/* HCP Evolution — all years */}
-      {fullHcpHistory.length > 0 && (
-        <div style={S.card}>
-          <h2 style={S.cardTitle}>📉 Evolución del Handicap (2025–{new Date().getFullYear()})</h2>
-          <HcpChart history={fullHcpHistory} inicial={p.handicap} />
-          <div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:12}}>
-            {fullHcpHistory.map((h,i) => (
-              <div key={i} style={{
-                textAlign:"center",padding:"6px 10px",borderRadius:8,minWidth:55,
-                backgroundColor: i===fullHcpHistory.length-1 ? "#1a472a" : "#f9fafb",
-                border: i===fullHcpHistory.length-1 ? "none" : "1px solid #e5e7eb"
-              }}>
-                <div style={{fontSize:9,color:i===fullHcpHistory.length-1?"#86efac":"#9ca3af",marginBottom:2,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",maxWidth:65}}>{h.roundName.split(" - ")[0]}</div>
-                <div style={{fontSize:16,fontWeight:800,color:i===fullHcpHistory.length-1?"#fff":"#1a472a"}}>{h.hcp}</div>
+      {/* HCP Evolution — with own year filter */}
+      {fullHcpHistory.length > 0 && (() => {
+        const availYears = [...new Set(fullHcpHistory.map(h=>h.year))].sort();
+        const [hcpYearFilter, setHcpYearFilter] = useState("all");
+        const filteredHistory = hcpYearFilter === "all"
+          ? fullHcpHistory
+          : fullHcpHistory.filter(h => h.year === parseInt(hcpYearFilter));
+        const lastHcp = filteredHistory[filteredHistory.length-1]?.hcp;
+        return (
+          <div style={S.card}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,flexWrap:"wrap",gap:8}}>
+              <h2 style={{...S.cardTitle,margin:0}}>📉 Evolución del Handicap</h2>
+              <div style={{display:"flex",gap:5,flexWrap:"wrap",alignItems:"center"}}>
+                {/* Legend */}
+                {hcpYearFilter === "all" && availYears.length > 1 && availYears.map(y => (
+                  <span key={y} style={{display:"flex",alignItems:"center",gap:3,fontSize:11,color:"#6b7280",marginRight:4}}>
+                    <span style={{width:10,height:10,borderRadius:"50%",backgroundColor:y===2025?"#1a472a":"#2563eb",display:"inline-block"}}/>
+                    {y}
+                  </span>
+                ))}
+                {/* Filter buttons */}
+                <button style={{...S.chip,fontSize:11,padding:"3px 10px",...(hcpYearFilter==="all"?{backgroundColor:"#1a472a",color:"#fff",borderColor:"#1a472a"}:{})}}
+                  onClick={()=>setHcpYearFilter("all")}>Todas</button>
+                {availYears.map(y=>(
+                  <button key={y} style={{...S.chip,fontSize:11,padding:"3px 10px",...(hcpYearFilter===String(y)?{backgroundColor:y===2025?"#1a472a":"#2563eb",color:"#fff",borderColor:y===2025?"#1a472a":"#2563eb"}:{})}}
+                    onClick={()=>setHcpYearFilter(String(y))}>{y}</button>
+                ))}
               </div>
-            ))}
+            </div>
+            <HcpChart history={filteredHistory} inicial={p.handicap} />
+            <div style={{display:"flex",gap:5,flexWrap:"wrap",marginTop:10}}>
+              {filteredHistory.map((h,i) => {
+                const isLast = i===filteredHistory.length-1;
+                const yr2025 = h.year===2025;
+                return (
+                  <div key={i} style={{
+                    textAlign:"center",padding:"5px 9px",borderRadius:8,minWidth:50,
+                    backgroundColor: isLast ? (yr2025?"#1a472a":"#1d4ed8") : "#f9fafb",
+                    border: isLast ? "none" : `1px solid ${yr2025?"#d1fae5":"#dbeafe"}`
+                  }}>
+                    <div style={{fontSize:9,marginBottom:1,color:isLast?"rgba(255,255,255,0.7)":(yr2025?"#6b7280":"#93c5fd"),whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",maxWidth:60}}>
+                      {h.roundName.split(" - ")[0]}
+                    </div>
+                    <div style={{fontSize:15,fontWeight:800,color:isLast?"#fff":(yr2025?"#1a472a":"#1d4ed8")}}>{h.hcp}</div>
+                  </div>
+                );
+              })}
+            </div>
+            {hcpYearFilter==="all" && availYears.length > 1 && (
+              <div style={{fontSize:11,color:"#9ca3af",marginTop:8}}>
+                🟢 2025 · 🔵 2026 · ⭐ último HCP = <b>{lastHcp}</b>
+              </div>
+            )}
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Monthly breakdown */}
       <div style={S.card}>
@@ -1622,42 +1659,98 @@ function ManualEntry({players, allRounds, yearRounds, saveRounds, nav}) {
   );
 }
 
-// ======== HCP CHART (SVG sparkline) ========
+// ======== HCP CHART (SVG sparkline — year-aware) ========
 function HcpChart({ history, inicial }) {
   if (!history || history.length === 0) return null;
   const vals = history.map(h => h.hcp);
+  const years = history.map(h => h.year || 2025);
   const allVals = [inicial, ...vals];
   const min = Math.max(0, Math.min(...allVals) - 2);
   const max = Math.max(...allVals) + 2;
-  const W = 500, H = 80, PAD = 10;
-  const xStep = (W - PAD*2) / Math.max(vals.length, 1);
-  const yScale = v => PAD + ((max - v) / (max - min)) * (H - PAD*2);
+  const W = 520, H = 90, PAD = 14, RIGHT = 30;
+  const n = vals.length;
+  const xStep = (W - PAD - RIGHT) / Math.max(n - 1, 1);
+  const yScale = v => PAD + ((max - v) / Math.max(max - min, 1)) * (H - PAD * 2);
 
-  const points = vals.map((v,i) => `${PAD + i * xStep},${yScale(v)}`).join(" ");
-  const lastIdx = vals.length - 1;
+  // Find where year changes (for separator)
+  const yearChanges = [];
+  for (let i = 1; i < years.length; i++) {
+    if (years[i] !== years[i-1]) yearChanges.push(i);
+  }
+
+  // Color per dot: 2025 = green, 2026 = blue
+  const dotColor = (yr, isLast) => {
+    if (isLast) return "#b8860b";
+    return yr === 2025 ? "#1a472a" : "#2563eb";
+  };
+  const lineColor = (yr) => yr === 2025 ? "#1a472a" : "#2563eb";
+
+  // Build segments per year (separate polylines)
+  const segments = [];
+  let segStart = 0;
+  for (let i = 1; i <= n; i++) {
+    if (i === n || years[i] !== years[segStart]) {
+      const pts = vals.slice(segStart, i).map((v, j) =>
+        `${PAD + (segStart + j) * xStep},${yScale(v)}`).join(" ");
+      segments.push({ pts, yr: years[segStart] });
+      segStart = i;
+    }
+  }
+
+  const lastIdx = n - 1;
 
   return (
     <div style={{overflowX:"auto"}}>
       <svg viewBox={`0 0 ${W} ${H}`} style={{width:"100%",minWidth:300,height:H}} xmlns="http://www.w3.org/2000/svg">
         {/* Reference line: inicial */}
-        <line x1={PAD} y1={yScale(inicial)} x2={W-PAD} y2={yScale(inicial)}
-          stroke="#d1d5db" strokeWidth="1" strokeDasharray="4,3" />
-        <text x={W-PAD+2} y={yScale(inicial)+4} fontSize="9" fill="#9ca3af">{inicial}</text>
+        <line x1={PAD} y1={yScale(inicial)} x2={W-RIGHT} y2={yScale(inicial)}
+          stroke="#e5e7eb" strokeWidth="1" strokeDasharray="4,3" />
+        <text x={W-RIGHT+2} y={yScale(inicial)+4} fontSize="9" fill="#9ca3af">{inicial}</text>
 
-        {/* Line */}
-        <polyline points={points} fill="none" stroke="#1a472a" strokeWidth="2" strokeLinejoin="round" />
+        {/* Year separator lines */}
+        {yearChanges.map(i => {
+          const x = PAD + i * xStep;
+          return (
+            <g key={i}>
+              <line x1={x} y1={PAD-4} x2={x} y2={H-PAD+4}
+                stroke="#d1d5db" strokeWidth="1.5" strokeDasharray="3,2" />
+              <text x={x+3} y={PAD+2} fontSize="8" fill="#6b7280" fontWeight="600">
+                {years[i]}
+              </text>
+            </g>
+          );
+        })}
+
+        {/* Year label at start */}
+        {n > 0 && (
+          <text x={PAD} y={H-2} fontSize="8" fill="#9ca3af">{years[0]}</text>
+        )}
+
+        {/* Polyline segments per year */}
+        {segments.map((seg, si) => (
+          <polyline key={si} points={seg.pts} fill="none"
+            stroke={lineColor(seg.yr)} strokeWidth="2" strokeLinejoin="round" />
+        ))}
 
         {/* Dots */}
-        {vals.map((v,i) => (
-          <g key={i}>
-            <circle cx={PAD + i*xStep} cy={yScale(v)} r={i===lastIdx?5:3}
-              fill={i===lastIdx?"#b8860b":"#1a472a"} stroke="#fff" strokeWidth="1.5" />
-            {(i===0 || i===lastIdx || vals.length<=6) && (
-              <text x={PAD + i*xStep} y={yScale(v)-7} textAnchor="middle" fontSize="9"
-                fontWeight={i===lastIdx?"bold":"normal"} fill={i===lastIdx?"#92400e":"#374151"}>{v}</text>
-            )}
-          </g>
-        ))}
+        {vals.map((v, i) => {
+          const yr = years[i];
+          const isLast = i === lastIdx;
+          const showLabel = i === 0 || isLast || n <= 8 || yearChanges.includes(i);
+          return (
+            <g key={i}>
+              <circle cx={PAD + i * xStep} cy={yScale(v)} r={isLast ? 5 : 3}
+                fill={dotColor(yr, isLast)} stroke="#fff" strokeWidth="1.5" />
+              {showLabel && (
+                <text x={PAD + i * xStep} y={yScale(v) - 7} textAnchor="middle"
+                  fontSize="9" fontWeight={isLast ? "bold" : "normal"}
+                  fill={isLast ? "#92400e" : yr === 2025 ? "#374151" : "#1d4ed8"}>
+                  {v}
+                </text>
+              )}
+            </g>
+          );
+        })}
       </svg>
     </div>
   );
