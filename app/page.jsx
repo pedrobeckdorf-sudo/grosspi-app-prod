@@ -1188,10 +1188,11 @@ function PlayerDetail({pid, rankings, rounds, allRounds, nav, year, hcp2026, pla
     [...(allRounds||rounds)].sort((a,b) => new Date(a.date||0)-new Date(b.date||0)),
   [allRounds, rounds]);
 
-  // monthMap helper for 2025 HCP
+  // monthMap helper for 2025 HCP — always uses INIT_DATA (independent of menu year)
   const monthMap = {"Marzo":"Mar","Abril":"Abr","Mayo":"May","Junio":"Jun","Julio":"Jul","Agosto":"Ago","Septiembre":"Sep","Octubre":"Oct","Noviembre":"Nov","Diciembre":"Dic","Adicional 1":"Adic 1","Adicional 2":"Adic 2"};
   const get2025HcpLocal = (roundName) => {
-    const gb = p.grossByMonth || {};
+    // Always use hardcoded 2025 data — not affected by menu year selection
+    const gb = INIT_DATA.annual2025[pid]?.grossPts || {};
     if (gb[roundName] != null) return 36 - gb[roundName];
     for (const [full,abbr] of Object.entries(monthMap)) {
       if (roundName.includes(full)||roundName.includes(abbr)) { if(gb[abbr]!=null) return 36-gb[abbr]; }
@@ -2069,35 +2070,34 @@ function Stats({ allRounds, players, rankings, year, hcp2026, availableYears }) 
 
   return (
     <div style={S.view}>
-      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:12,marginBottom:20}}>
-        <div>
-          <h1 style={S.title}>Estadísticas</h1>
-          <p style={S.sub}>
-            {statsYear === "all" ? "Todas las temporadas" : `Temporada ${statsYear}`}
-          </p>
-        </div>
-        {/* Year selector */}
-        <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-          <button
-            style={{...S.chip,...(statsYear==="all"?{backgroundColor:"#1a472a",color:"#fff",borderColor:"#1a472a"}:{})}}
-            onClick={()=>setStatsYear("all")}
-          >Todas</button>
-          {availableYears.map(y => (
-            <button key={y}
-              style={{...S.chip,...(statsYear===String(y)?{backgroundColor:"#1a472a",color:"#fff",borderColor:"#1a472a"}:{})}}
-              onClick={()=>setStatsYear(String(y))}
-            >{y}</button>
-          ))}
-        </div>
+      <div style={{marginBottom:20}}>
+        <h1 style={S.title}>Estadísticas</h1>
+        <p style={S.sub}>{statsYear === "all" ? "Todas las temporadas" : `Temporada ${statsYear}`}</p>
       </div>
 
       {/* Tab switcher */}
-      <div style={{display:"flex",gap:6,marginBottom:16,flexWrap:"wrap"}}>
+      <div style={{display:"flex",gap:6,marginBottom:12,flexWrap:"wrap"}}>
         {tabs.map(t => (
           <button key={t.id} style={{...S.chip,...(tab===t.id?{backgroundColor:"#374151",color:"#fff",borderColor:"#374151"}:{})}}
             onClick={()=>setTab(t.id)}>{t.label}</button>
         ))}
       </div>
+
+      {/* Year selector — only for Performance and Ranking tabs */}
+      {tab !== "hcp" && (
+        <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:16}}>
+          <button
+            style={{...S.chip,fontSize:12,...(statsYear==="all"?{backgroundColor:"#1a472a",color:"#fff",borderColor:"#1a472a"}:{})}}
+            onClick={()=>setStatsYear("all")}
+          >Todas</button>
+          {availableYears.map(y => (
+            <button key={y}
+              style={{...S.chip,fontSize:12,...(statsYear===String(y)?{backgroundColor:"#1a472a",color:"#fff",borderColor:"#1a472a"}:{})}}
+              onClick={()=>setStatsYear(String(y))}
+            >{y}</button>
+          ))}
+        </div>
+      )}
 
       {/* ── HCP Medio ── */}
       {tab==="hcp" && (
