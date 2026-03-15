@@ -772,6 +772,10 @@ function RoundDetail({rid, rounds, players, nav, year, hcp2026, allYearRounds, i
     }).filter(Boolean).sort((a,b) => b.netPts - a.netPts);
   }, [round, players, year, hcp2026, allYearRounds]);
 
+  const [expandedPid, setExpandedPid] = useState(null);
+  // Auto-expand winner on load
+  useEffect(() => { if (board[0]) setExpandedPid(board[0].player.id); }, [rid]);
+
   return (
     <div style={S.view}>
       <button style={S.back} onClick={()=>nav("rounds")}>← Rondas</button>
@@ -818,52 +822,92 @@ function RoundDetail({rid, rounds, players, nav, year, hcp2026, allYearRounds, i
         </div>
       )}
 
-      {/* Leaderboard */}
+      {/* Leaderboard — click row to expand scorecard */}
       <div style={S.card}>
-        <h2 style={S.cardTitle}>Leaderboard</h2>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+          <h2 style={{...S.cardTitle,margin:0}}>Leaderboard</h2>
+          <span style={{fontSize:11,color:"#9ca3af"}}>Toca un jugador para ver su scorecard</span>
+        </div>
         <div style={S.tblWrap}><table style={S.tbl}><thead><tr>
           <th style={S.th}>#</th><th style={{...S.th,textAlign:"left"}}>Jugador</th><th style={S.th}>HCP</th><th style={S.th}>Golpes</th>
           <th style={{...S.th,color:"#4a6741"}}>Pts Neto</th><th style={S.th}>Pts Gross</th>
           {isAdmin && <th style={S.th}></th>}
         </tr></thead><tbody>
-          {board.map((e,i) => (
-            <tr key={e.player.id} style={S.tr}>
-              <td style={S.td}><span style={{...S.rank,...(i<3?S["rank"+i]:{})}}>
-                {i===0?"🥇":i===1?"🥈":i===2?"🥉":i+1}
-              </span></td>
-              <td style={{...S.td,textAlign:"left",fontWeight:600}}>{e.player.name}</td>
-              <td style={S.td}>{e.hcp ?? e.player.handicap}</td>
-              <td style={S.td}>{e.totalStrokes}</td>
-              <td style={{...S.td,fontWeight:800,color:"#1a472a",fontSize:16}}>{e.netPts}</td>
-              <td style={S.td}>{e.grossPts}</td>
-              {isAdmin && (
-                <td style={S.td}>
-                  <button
-                    onClick={() => handleDeletePlayer(e.player.id)}
-                    style={{padding:"3px 8px",borderRadius:5,border:"1px solid #fca5a5",backgroundColor:"#fef2f2",color:"#dc2626",fontSize:11,cursor:"pointer",fontWeight:600}}
-                  >✕</button>
-                </td>
-              )}
-            </tr>
-          ))}
+          {board.map((e,i) => {
+            const isExpanded = expandedPid === e.player.id;
+            return (
+              <>
+                <tr key={e.player.id}
+                  style={{...S.tr, cursor:"pointer", backgroundColor: isExpanded ? "#f0f7f0" : "transparent"}}
+                  onClick={() => setExpandedPid(isExpanded ? null : e.player.id)}
+                >
+                  <td style={S.td}><span style={{...S.rank,...(i<3?S["rank"+i]:{})}}>
+                    {i===0?"🥇":i===1?"🥈":i===2?"🥉":i+1}
+                  </span></td>
+                  <td style={{...S.td,textAlign:"left",fontWeight:600,color:isExpanded?"#1a472a":"inherit"}}>
+                    <span style={{marginRight:6}}>{isExpanded?"▼":"▶"}</span>{e.player.name}
+                  </td>
+                  <td style={S.td}>{e.hcp ?? e.player.handicap}</td>
+                  <td style={S.td}>{e.totalStrokes}</td>
+                  <td style={{...S.td,fontWeight:800,color:"#1a472a",fontSize:16}}>{e.netPts}</td>
+                  <td style={S.td}>{e.grossPts}</td>
+                  {isAdmin && (
+                    <td style={S.td}>
+                      <button
+                        onClick={ev => { ev.stopPropagation(); handleDeletePlayer(e.player.id); }}
+                        style={{padding:"3px 8px",borderRadius:5,border:"1px solid #fca5a5",backgroundColor:"#fef2f2",color:"#dc2626",fontSize:11,cursor:"pointer",fontWeight:600}}
+                      >✕</button>
+                    </td>
+                  )}
+                </tr>
+                {/* Inline expanded scorecard */}
+                {isExpanded && (
+                  <tr key={`sc-${e.player.id}`}>
+                    <td colSpan={isAdmin ? 7 : 6} style={{padding:"0 0 8px",backgroundColor:"#f8fdf8"}}>
+                      <div style={{overflowX:"auto",padding:"8px 4px"}}>
+                        <table style={{...S.tbl,fontSize:11}}>
+                          <thead>
+                            <tr>
+                              <td style={{...S.tdS,fontWeight:700,color:"#6b7280",width:52}}>Hoyo</td>
+                              {COURSE.pars.map((_,j)=><td key={j} style={{...S.tdS,fontSize:10,color:"#9ca3af"}}>{j+1}</td>)}
+                              <td style={{...S.tdS,fontWeight:700}}>TOT</td>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            <tr>
+                              <td style={{...S.tdS,fontWeight:600,color:"#6b7280"}}>Par</td>
+                              {COURSE.pars.map((par,j)=><td key={j} style={S.tdS}>{par}</td>)}
+                              <td style={{...S.tdS,fontWeight:700}}>{PAR_TOTAL}</td>
+                            </tr>
+                            <tr>
+                              <td style={{...S.tdS,fontWeight:600,color:"#6b7280"}}>Golpes</td>
+                              {e.details.map((d,j)=>(
+                                <td key={j} style={{...S.tdS,color:scoreColor(d.strokes,d.par),fontWeight:700,fontSize:12}}>
+                                  {d.strokes||"-"}
+                                </td>
+                              ))}
+                              <td style={{...S.tdS,fontWeight:700}}>{e.totalStrokes}</td>
+                            </tr>
+                            <tr>
+                              <td style={{...S.tdS,fontWeight:600,color:"#6b7280"}}>Neto</td>
+                              {e.details.map((d,j)=>(
+                                <td key={j} style={{...S.tdS,fontWeight:600,color:d.netPts>=2?"#1a472a":d.netPts===1?"#6b7280":"#9ca3af"}}>
+                                  {d.netPts}
+                                </td>
+                              ))}
+                              <td style={{...S.tdS,fontWeight:800,color:"#1a472a"}}>{e.netPts}</td>
+                            </tr>
+                          </tbody>
+                        </table>
+                      </div>
+                    </td>
+                  </tr>
+                )}
+              </>
+            );
+          })}
         </tbody></table></div>
       </div>
-
-      {/* Scorecard of winner */}
-      {board[0] && (
-        <div style={S.card}>
-          <h2 style={S.cardTitle}>Scorecard — {board[0].player.name}</h2>
-          <div style={S.tblWrap}><table style={S.tbl}><thead><tr>
-            <th style={S.thS}>Hoyo</th>
-            {COURSE.pars.map((_,i) => <th key={i} style={S.thS}>{i+1}</th>)}
-            <th style={S.thS}>TOT</th>
-          </tr></thead><tbody>
-            <tr><td style={S.tdS}>Par</td>{COURSE.pars.map((p,i)=><td key={i} style={S.tdS}>{p}</td>)}<td style={{...S.tdS,fontWeight:700}}>{PAR_TOTAL}</td></tr>
-            <tr><td style={S.tdS}>Golpes</td>{board[0].details.map((d,i)=><td key={i} style={{...S.tdS,color:scoreColor(d.strokes,d.par),fontWeight:600}}>{d.strokes||"-"}</td>)}<td style={{...S.tdS,fontWeight:700}}>{board[0].totalStrokes}</td></tr>
-            <tr><td style={S.tdS}>Neto</td>{board[0].details.map((d,i)=><td key={i} style={{...S.tdS,fontWeight:600}}>{d.netPts}</td>)}<td style={{...S.tdS,fontWeight:700,color:"#1a472a"}}>{board[0].netPts}</td></tr>
-          </tbody></table></div>
-        </div>
-      )}
 
       {/* Photo Gallery */}
       <PhotoGallery photos={round.photos || []} players={players} />
