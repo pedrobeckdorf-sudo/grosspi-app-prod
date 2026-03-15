@@ -545,7 +545,7 @@ export default function App() {
         {view==="round-detail" && <RoundDetail rid={selRound} rounds={rounds} players={players} nav={nav} year={year} hcp2026={hcp2026} allYearRounds={yearRounds} isAdmin={isAdmin} saveRounds={saveRounds} allRounds={rounds} />}
         {view==="players" && <Players rankings={rankings} nav={nav} year={year} hcp2026={hcp2026} />}
         {view==="player-detail" && <PlayerDetail pid={selPlayer} rankings={rankings} rounds={yearRounds} nav={nav} year={year} hcp2026={hcp2026} players={players} />}
-        {view==="stats" && <Stats rounds={yearRounds} players={players} rankings={rankings} year={year} hcp2026={hcp2026} />}
+        {view==="stats" && <Stats allRounds={rounds} players={players} rankings={rankings} year={year} hcp2026={hcp2026} availableYears={availableYears} />}
         {view==="compare" && <Compare rankings={rankings} cmpIds={cmpIds} setCmpIds={setCmpIds} rounds={yearRounds} />}
         {view==="manual" && isAdmin && <ManualEntry players={players} allRounds={rounds} yearRounds={yearRounds} saveRounds={saveRounds} nav={nav} />}
         {view==="manual" && !isAdmin && <div style={S.empty}>🔒 Acceso restringido a administradores</div>}
@@ -1452,10 +1452,24 @@ function HcpChart({ history, inicial }) {
 }
 
 // ======== STATS ========
-function Stats({ rounds, players, rankings, year, hcp2026 }) {
+function Stats({ allRounds, players, rankings, year, hcp2026, availableYears }) {
   const [tab, setTab] = useState("hcp");
   const [selPlayer, setSelPlayer] = useState("all");
   const [perfPlayer, setPerfPlayer] = useState("all");
+  const [statsYear, setStatsYear] = useState(String(year)); // "2025", "2026", "all"
+
+  // Filter rounds by selected statsYear
+  const rounds = useMemo(() => {
+    if (statsYear === "all") return allRounds;
+    return allRounds.filter(r => roundYear(r) === parseInt(statsYear));
+  }, [allRounds, statsYear]);
+
+  // For "Todos", need combined rankings across all rounds
+  const effectiveRankings = useMemo(() => {
+    if (statsYear !== "all") return rankings;
+    // Recompute rankings using all rounds combined
+    return computeRankingsFromRounds(players, allRounds, parseInt(availableYears[availableYears.length-1]), hcp2026);
+  }, [statsYear, rankings, allRounds, players, hcp2026, availableYears]);
 
   // Build HCP history per round (sorted by date)
   const sortedRounds = useMemo(() =>
@@ -1463,14 +1477,11 @@ function Stats({ rounds, players, rankings, year, hcp2026 }) {
   [rounds]);
 
   // Helper: get gross HCP for a player in a 2025 round
-  // grossByMonth keys are like "Mar", "Abr" — map from round name
   const get2025Hcp = (pid, roundName) => {
-    const pr = rankings.find(x => x.id === pid);
-    if (!pr) return 36;
-    // grossByMonth has abbreviated keys — try direct match first, then partial
+    const pr = effectiveRankings.find(x => x.id === pid);
+    if (!pr) return null;
     const gb = pr.grossByMonth || {};
     if (gb[roundName] != null) return 36 - gb[roundName];
-    // Try matching: "T1 - Marzo" -> "Mar", "T2 - Abril" -> "Abr", etc.
     const monthMap = {
       "Marzo":"Mar","Abril":"Abr","Mayo":"May","Junio":"Jun",
       "Julio":"Jul","Agosto":"Ago","Septiembre":"Sep","Octubre":"Oct",
@@ -1481,13 +1492,15 @@ function Stats({ rounds, players, rankings, year, hcp2026 }) {
         if (gb[abbr] != null) return 36 - gb[abbr];
       }
     }
-    // Also try Adic pattern
     if (roundName.includes("Adic")) {
       const n = roundName.includes("2") ? "Adic 2" : "Adic 1";
       if (gb[n] != null) return 36 - gb[n];
     }
-    return null; // player didn't play this round
+    return null;
   };
+
+  // Determine if a round belongs to 2025 (for HCP calc mode)
+  const isRound2025 = (r) => roundYear(r) === 2025;
 
   // For HCP chart: collect hcp per player per round
   const hcpData = useMemo(() => {
@@ -1497,17 +1510,17 @@ function Stats({ rounds, players, rankings, year, hcp2026 }) {
       sortedRounds.forEach((r, rIdx) => {
         if (!r.scores?.[p.id]) return;
         let hcp;
-        if (year >= 2026) {
-          hcp = calcDynamicHcp(p.id, rIdx, sortedRounds, players, hcp2026);
-        } else {
+        if (isRound2025(r)) {
           hcp = get2025Hcp(p.id, r.name);
           if (hcp === null) return;
+        } else {
+          hcp = calcDynamicHcp(p.id, rIdx, sortedRounds, players, hcp2026);
         }
         data[p.id].push({ roundName: r.name, hcp, date: r.date });
       });
     });
     return data;
-  }, [sortedRounds, players, year, hcp2026, rankings]);
+  }, [sortedRounds, players, hcp2026, effectiveRankings]);
 
   // Average HCP per round across all players who played
   const avgHcpPerRound = useMemo(() => {
@@ -1515,9 +1528,8 @@ function Stats({ rounds, players, rankings, year, hcp2026 }) {
       const hcps = players
         .filter(p => r.scores?.[p.id])
         .map(p => {
-          if (year >= 2026) return calcDynamicHcp(p.id, rIdx, sortedRounds, players, hcp2026);
-          const h = get2025Hcp(p.id, r.name);
-          return h;
+          if (isRound2025(r)) return get2025Hcp(p.id, r.name);
+          return calcDynamicHcp(p.id, rIdx, sortedRounds, players, hcp2026);
         })
         .filter(h => h !== null);
       return {
@@ -1525,7 +1537,7 @@ function Stats({ rounds, players, rankings, year, hcp2026 }) {
         avg: hcps.length ? Math.round(hcps.reduce((s,v)=>s+v,0)/hcps.length) : null
       };
     }).filter(x => x.avg !== null);
-  }, [sortedRounds, players, year, hcp2026, rankings]);
+  }, [sortedRounds, players, hcp2026, effectiveRankings]);
 
   // Performance: hole avg — filterable by player
   const holePerf = useMemo(() => {
@@ -1582,12 +1594,32 @@ function Stats({ rounds, players, rankings, year, hcp2026 }) {
 
   return (
     <div style={S.view}>
-      <div style={S.hdr}><h1 style={S.title}>Estadísticas {year}</h1></div>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:12,marginBottom:20}}>
+        <div>
+          <h1 style={S.title}>Estadísticas</h1>
+          <p style={S.sub}>
+            {statsYear === "all" ? "Todas las temporadas" : `Temporada ${statsYear}`}
+          </p>
+        </div>
+        {/* Year selector */}
+        <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+          <button
+            style={{...S.chip,...(statsYear==="all"?{backgroundColor:"#1a472a",color:"#fff",borderColor:"#1a472a"}:{})}}
+            onClick={()=>setStatsYear("all")}
+          >Todas</button>
+          {availableYears.map(y => (
+            <button key={y}
+              style={{...S.chip,...(statsYear===String(y)?{backgroundColor:"#1a472a",color:"#fff",borderColor:"#1a472a"}:{})}}
+              onClick={()=>setStatsYear(String(y))}
+            >{y}</button>
+          ))}
+        </div>
+      </div>
 
       {/* Tab switcher */}
       <div style={{display:"flex",gap:6,marginBottom:16,flexWrap:"wrap"}}>
         {tabs.map(t => (
-          <button key={t.id} style={{...S.chip,...(tab===t.id?{backgroundColor:"#1a472a",color:"#fff",borderColor:"#1a472a"}:{})}}
+          <button key={t.id} style={{...S.chip,...(tab===t.id?{backgroundColor:"#374151",color:"#fff",borderColor:"#374151"}:{})}}
             onClick={()=>setTab(t.id)}>{t.label}</button>
         ))}
       </div>
