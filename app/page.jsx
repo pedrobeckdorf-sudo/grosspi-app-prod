@@ -1749,12 +1749,15 @@ function ManualEntry({players, allRounds, yearRounds, saveRounds, nav, pending, 
   const [previewReq, setPreviewReq] = useState(null);
   const [lightboxSrc, setLightboxSrc] = useState(null);
 
+  const [activeReqId, setActiveReqId] = useState(null); // ID of pending request being worked on
+
   const approveRequest = (req) => {
-    // Pre-fill the form with the request data and remove from pending
+    // Pre-fill form but DON'T remove from pending yet — only remove on successful save
     setForm({ date: req.date, name: req.roundName, playerId: req.playerId, scores: Array(18).fill("") });
     setPhoto(req.photo);
+    setActiveReqId(req.id);
     setPreviewReq(null);
-    savePending(pending.filter(p => p.id !== req.id));
+    setLightboxSrc(req.photo); // open photo immediately so admin can read it
     window.scrollTo(0, 0);
   };
 
@@ -1762,6 +1765,7 @@ function ManualEntry({players, allRounds, yearRounds, saveRounds, nav, pending, 
     if (!confirm(`¿Rechazar la solicitud de ${req.playerName} para ${req.roundName}?`)) return;
     savePending(pending.filter(p => p.id !== req.id));
     if (previewReq?.id === req.id) setPreviewReq(null);
+    if (activeReqId === req.id) { setActiveReqId(null); setPhoto(null); }
   };
 
   // Count players already loaded per round name (filtered year only)
@@ -1809,6 +1813,11 @@ function ManualEntry({players, allRounds, yearRounds, saveRounds, nav, pending, 
         photos: photo ? [{player:form.playerId, src:photo}] : []
       }]);
     }
+    // Remove the pending request NOW that save succeeded
+    if (activeReqId) {
+      savePending(pending.filter(p => p.id !== activeReqId));
+      setActiveReqId(null);
+    }
     setSaved(true);
     setTimeout(() => setSaved(false), 2500);
     setForm({...form, playerId:"", scores:Array(18).fill("")});
@@ -1844,12 +1853,13 @@ function ManualEntry({players, allRounds, yearRounds, saveRounds, nav, pending, 
           <div style={{display:"flex",flexDirection:"column",gap:8}}>
             {pending.map(req => (
               <div key={req.id} style={{
-                padding:"12px 14px",borderRadius:8,border:"1px solid #fca5a5",
-                backgroundColor: previewReq?.id===req.id?"#fef2f2":"#fff",
+                padding:"12px 14px",borderRadius:8,border: activeReqId===req.id ? "2px solid #1a472a" : "1px solid #fca5a5",
+                backgroundColor: activeReqId===req.id ? "#f0f7f0" : previewReq?.id===req.id?"#fef2f2":"#fff",
                 cursor:"pointer"
               }} onClick={()=>setPreviewReq(previewReq?.id===req.id?null:req)}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
                   <div>
+                    {activeReqId===req.id && <span style={{fontSize:10,padding:"1px 7px",borderRadius:8,backgroundColor:"#1a472a",color:"#fff",fontWeight:700,marginRight:6}}>✏️ En curso</span>}
                     <span style={{fontWeight:700,color:"#1a472a",fontSize:14}}>{req.playerName}</span>
                     <span style={{color:"#6b7280",fontSize:12,marginLeft:8}}>{req.roundName}</span>
                     <span style={{color:"#9ca3af",fontSize:11,marginLeft:8}}>{req.date ? new Date(req.date).toLocaleDateString("es-CL",{day:"numeric",month:"short"}) : ""}</span>
