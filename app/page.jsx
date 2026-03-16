@@ -198,7 +198,7 @@ function lsSet(key, val) {
 }
 
 // DB paths
-const DB = { players: "grosspi/players", rounds: "grosspi/rounds", hcp2026: "grosspi/hcp2026" };
+const DB = { players: "grosspi/players", rounds: "grosspi/rounds", hcp2026: "grosspi/hcp2026", pending: "grosspi/pending" };
 const LS = { role: "grosspi:role" };
 
 const ADMIN_PIN = "Sbv1240";
@@ -340,6 +340,7 @@ export default function App() {
   const [players, setPlayers] = useState(INIT_DATA.players);
   const [rounds, setRounds] = useState(INIT_DATA.rounds);
   const [hcp2026, setHcp2026] = useState(HCP_2026_DEFAULT);
+  const [pending, setPending] = useState([]);
   const [view, setView] = useState("dashboard");
   const [selPlayer, setSelPlayer] = useState(null);
   const [selRound, setSelRound] = useState(null);
@@ -383,6 +384,9 @@ export default function App() {
         if (val) setHcp2026(val);
         if (firstHcp) firstHcp = false;
       });
+      await fbSubscribe(DB.pending, (val) => {
+        setPending(Array.isArray(val) ? val : val ? Object.values(val) : []);
+      });
       // Small delay to let Firebase respond before showing UI
       setTimeout(() => setLoaded(true), 800);
     })();
@@ -397,6 +401,7 @@ export default function App() {
   const savePlayers = useCallback(async (p) => { setPlayers(p); await fbSet(DB.players, p); }, []);
   const saveRounds = useCallback(async (r) => { setRounds(r); await fbSet(DB.rounds, r); }, []);
   const saveHcp2026 = useCallback(async (h) => { setHcp2026(h); await fbSet(DB.hcp2026, h); }, []);
+  const savePending = useCallback(async (p) => { setPending(p); await fbSet(DB.pending, p); }, []);
 
   const nav = (v, extra={}) => {
     if (extra.pid) setSelPlayer(extra.pid);
@@ -471,7 +476,7 @@ export default function App() {
     {id:"players",icon:"👥",label:"Jugadores"},
     {id:"stats",icon:"📊",label:"Estadísticas"},
     {id:"compare",icon:"⚔️",label:"Comparar"},
-    ...(isAdmin ? [{id:"manual",icon:"📝",label:"Cargar Ronda"}] : []),
+    {id:"manual",icon:"📝",label:"Cargar Ronda"},
     {id:"reglamento",icon:"📜",label:"Reglamento"},
     ...(isAdmin ? [{id:"settings",icon:"⚙️",label:"Config"}] : []),
   ];
@@ -517,7 +522,12 @@ export default function App() {
           {navItems.map(n => (
             <button key={n.id} style={{...S.navBtn, ...(view===n.id?S.navActive:{})}} onClick={() => nav(n.id)}>
               <span style={{width:22,textAlign:"center"}}>{n.icon}</span>
-              <span>{n.label}</span>
+              <span style={{flex:1}}>{n.label}</span>
+              {n.id==="manual" && isAdmin && pending.length > 0 && (
+                <span style={{backgroundColor:"#ef4444",color:"#fff",borderRadius:10,fontSize:10,fontWeight:700,padding:"1px 6px",minWidth:18,textAlign:"center"}}>
+                  {pending.length}
+                </span>
+              )}
             </button>
           ))}
         </div>
@@ -547,8 +557,8 @@ export default function App() {
         {view==="player-detail" && <PlayerDetail pid={selPlayer} rankings={rankings} rounds={yearRounds} allRounds={rounds} nav={nav} year={year} hcp2026={hcp2026} players={players} />}
         {view==="stats" && <Stats allRounds={rounds} players={players} rankings={rankings} year={year} hcp2026={hcp2026} availableYears={availableYears} />}
         {view==="compare" && <Compare rankings={rankings} cmpIds={cmpIds} setCmpIds={setCmpIds} rounds={yearRounds} allRounds={rounds} players={players} hcp2026={hcp2026} />}
-        {view==="manual" && isAdmin && <ManualEntry players={players} allRounds={rounds} yearRounds={yearRounds} saveRounds={saveRounds} nav={nav} />}
-        {view==="manual" && !isAdmin && <div style={S.empty}>🔒 Acceso restringido a administradores</div>}
+        {view==="manual" && isAdmin && <ManualEntry players={players} allRounds={rounds} yearRounds={yearRounds} saveRounds={saveRounds} nav={nav} pending={pending} savePending={savePending} />}
+        {view==="manual" && !isAdmin && <PlayerPhotoUpload players={players} pending={pending} savePending={savePending} />}
         {view==="reglamento" && <Reglamento hcp2026={hcp2026} saveHcp2026={saveHcp2026} isAdmin={isAdmin} />}
         {view==="settings" && isAdmin && <Settings players={players} savePlayers={savePlayers} rounds={rounds} saveRounds={saveRounds} hcp2026={hcp2026} saveHcp2026={saveHcp2026} />}
         {view==="settings" && !isAdmin && <div style={S.empty}>🔒 Acceso restringido a administradores</div>}
@@ -1619,6 +1629,112 @@ function Compare({rankings, cmpIds, setCmpIds, rounds, allRounds, players, hcp20
 }
 
 // ======== UPLOAD ========
+// ======== PLAYER PHOTO UPLOAD (jugadores) ========
+function PlayerPhotoUpload({ players, pending, savePending }) {
+  const [form, setForm] = useState({ date: new Date().toISOString().split("T")[0], name: "", playerId: "" });
+  const [photo, setPhoto] = useState(null);
+  const [sent, setSent] = useState(false);
+
+  const handlePhoto = f => {
+    if (!f?.type?.startsWith("image/")) return;
+    const reader = new FileReader();
+    reader.onload = e => setPhoto(e.target.result);
+    reader.readAsDataURL(f);
+  };
+
+  const submit = () => {
+    if (!form.playerId || !form.name || !form.date || !photo) return;
+    const newEntry = {
+      id: "req" + Date.now(),
+      roundName: form.name,
+      date: form.date,
+      playerId: form.playerId,
+      playerName: players.find(p => p.id === form.playerId)?.name || form.playerId,
+      photo,
+      submittedAt: new Date().toISOString(),
+      status: "pending"
+    };
+    savePending([...pending, newEntry]);
+    setSent(true);
+    setForm({ date: new Date().toISOString().split("T")[0], name: "", playerId: "" });
+    setPhoto(null);
+    setTimeout(() => setSent(false), 4000);
+  };
+
+  return (
+    <div style={S.view}>
+      <div style={S.hdr}>
+        <h1 style={S.title}>Subir Foto de Tarjeta</h1>
+        <p style={S.sub}>Sube una foto de tu scorecard — el admin validará e ingresará los datos</p>
+      </div>
+
+      {sent && (
+        <div style={{backgroundColor:"#f0fdf4",border:"1px solid #86efac",borderRadius:10,padding:"14px 18px",marginBottom:16,textAlign:"center"}}>
+          <span style={{color:"#065f46",fontWeight:600,fontSize:14}}>✅ Foto enviada correctamente — el admin la revisará pronto</span>
+        </div>
+      )}
+
+      <div style={S.card}>
+        <h2 style={S.cardTitle}>Datos de la Ronda</h2>
+        <div style={{display:"flex",gap:12,flexWrap:"wrap",marginBottom:16}}>
+          <div style={{flex:1,minWidth:180}}>
+            <label style={S.label}>Ronda</label>
+            <select style={S.input} value={form.name} onChange={e=>setForm({...form,name:e.target.value})}>
+              <option value="">Seleccionar ronda...</option>
+              {ROUND_NAMES.map(rn => <option key={rn} value={rn}>{rn}</option>)}
+            </select>
+          </div>
+          <div style={{flex:1,minWidth:150}}>
+            <label style={S.label}>Fecha</label>
+            <input style={S.input} type="date" value={form.date} onChange={e=>setForm({...form,date:e.target.value})} />
+          </div>
+          <div style={{flex:1,minWidth:180}}>
+            <label style={S.label}>Jugador</label>
+            <select style={S.input} value={form.playerId} onChange={e=>setForm({...form,playerId:e.target.value})}>
+              <option value="">Seleccionar...</option>
+              {players.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div style={S.card}>
+        <h2 style={S.cardTitle}>📷 Foto de la Tarjeta <span style={{color:"#ef4444",fontSize:12}}>*obligatoria</span></h2>
+        {photo ? (
+          <div style={{textAlign:"center"}}>
+            <img src={photo} alt="Tarjeta" style={{maxWidth:"100%",maxHeight:300,borderRadius:10,border:"1px solid #e5e7eb"}} />
+            <button style={{...S.btn,...S.btnS,marginTop:10,fontSize:12,padding:"8px 16px"}} onClick={()=>setPhoto(null)}>✕ Quitar foto</button>
+          </div>
+        ) : (
+          <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+            <label style={{flex:1,minWidth:130,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:6,padding:"20px 12px",borderRadius:10,border:"2px dashed #86efac",backgroundColor:"#f0fdf4",cursor:"pointer",textAlign:"center"}}>
+              <span style={{fontSize:32}}>📷</span>
+              <span style={{fontSize:13,fontWeight:600,color:"#1a472a"}}>Sacar foto</span>
+              <span style={{fontSize:11,color:"#6b7280"}}>Cámara del celular</span>
+              <input type="file" accept="image/*" capture="environment" style={{display:"none"}} onChange={e=>handlePhoto(e.target.files[0])} />
+            </label>
+            <label style={{flex:1,minWidth:130,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:6,padding:"20px 12px",borderRadius:10,border:"2px dashed #d1d5db",backgroundColor:"#f9fafb",cursor:"pointer",textAlign:"center"}}>
+              <span style={{fontSize:32}}>🖼️</span>
+              <span style={{fontSize:13,fontWeight:600,color:"#374151"}}>Desde galería</span>
+              <span style={{fontSize:11,color:"#6b7280"}}>Elegir archivo</span>
+              <input type="file" accept="image/*" style={{display:"none"}} onChange={e=>handlePhoto(e.target.files[0])} />
+            </label>
+          </div>
+        )}
+      </div>
+
+      <button
+        style={{...S.btn,...S.btnP,width:"100%",padding:"14px 24px",fontSize:15,
+          opacity:(!form.name||!form.playerId||!form.date||!photo)?0.4:1}}
+        onClick={submit}
+        disabled={!form.name||!form.playerId||!form.date||!photo}
+      >
+        📤 Enviar al Admin
+      </button>
+    </div>
+  );
+}
+
 // ======== CARGAR RONDA ========
 const ROUND_NAMES = [
   "T1 - Marzo","T2 - Abril","T3 - Mayo","T4 - Junio","T5 - Julio",
@@ -1626,10 +1742,26 @@ const ROUND_NAMES = [
   "Adicional 1","Adicional 2"
 ];
 
-function ManualEntry({players, allRounds, yearRounds, saveRounds, nav}) {
+function ManualEntry({players, allRounds, yearRounds, saveRounds, nav, pending, savePending}) {
   const [form, setForm] = useState({date:new Date().toISOString().split("T")[0], name:"", playerId:"", scores:Array(18).fill("")});
   const [photo, setPhoto] = useState(null);
   const [saved, setSaved] = useState(false);
+  const [previewReq, setPreviewReq] = useState(null); // pending request being previewed
+
+  const approveRequest = (req) => {
+    // Pre-fill the form with the request data and remove from pending
+    setForm({ date: req.date, name: req.roundName, playerId: req.playerId, scores: Array(18).fill("") });
+    setPhoto(req.photo);
+    setPreviewReq(null);
+    savePending(pending.filter(p => p.id !== req.id));
+    window.scrollTo(0, 0);
+  };
+
+  const rejectRequest = (req) => {
+    if (!confirm(`¿Rechazar la solicitud de ${req.playerName} para ${req.roundName}?`)) return;
+    savePending(pending.filter(p => p.id !== req.id));
+    if (previewReq?.id === req.id) setPreviewReq(null);
+  };
 
   // Count players already loaded per round name (filtered year only)
   const roundPlayerCounts = useMemo(() => {
@@ -1687,6 +1819,53 @@ function ManualEntry({players, allRounds, yearRounds, saveRounds, nav}) {
   return (
     <div style={S.view}>
       <div style={S.hdr}><h1 style={S.title}>Cargar Ronda</h1><p style={S.sub}>Ingresa los scores de cada jugador y opcionalmente adjunta foto de respaldo</p></div>
+
+      {/* Pending photo requests */}
+      {pending.length > 0 && (
+        <div style={{...S.card,borderLeft:"4px solid #ef4444",marginBottom:20}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+            <h2 style={{...S.cardTitle,margin:0,color:"#dc2626"}}>
+              📬 Solicitudes Pendientes ({pending.length})
+            </h2>
+            <span style={{fontSize:11,color:"#6b7280"}}>Toca una para ver la foto y cargar la ronda</span>
+          </div>
+          <div style={{display:"flex",flexDirection:"column",gap:8}}>
+            {pending.map(req => (
+              <div key={req.id} style={{
+                padding:"12px 14px",borderRadius:8,border:"1px solid #fca5a5",
+                backgroundColor: previewReq?.id===req.id?"#fef2f2":"#fff",
+                cursor:"pointer"
+              }} onClick={()=>setPreviewReq(previewReq?.id===req.id?null:req)}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
+                  <div>
+                    <span style={{fontWeight:700,color:"#1a472a",fontSize:14}}>{req.playerName}</span>
+                    <span style={{color:"#6b7280",fontSize:12,marginLeft:8}}>{req.roundName}</span>
+                    <span style={{color:"#9ca3af",fontSize:11,marginLeft:8}}>{req.date ? new Date(req.date).toLocaleDateString("es-CL",{day:"numeric",month:"short"}) : ""}</span>
+                  </div>
+                  <div style={{display:"flex",gap:6}}>
+                    <button onClick={e=>{e.stopPropagation();approveRequest(req);}}
+                      style={{padding:"5px 12px",borderRadius:6,border:"none",backgroundColor:"#1a472a",color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer"}}>
+                      ✓ Cargar
+                    </button>
+                    <button onClick={e=>{e.stopPropagation();rejectRequest(req);}}
+                      style={{padding:"5px 10px",borderRadius:6,border:"1px solid #fca5a5",backgroundColor:"#fef2f2",color:"#dc2626",fontSize:12,cursor:"pointer"}}>
+                      ✕
+                    </button>
+                  </div>
+                </div>
+                {previewReq?.id===req.id && req.photo && (
+                  <div style={{marginTop:10,textAlign:"center"}}>
+                    <img src={req.photo} alt="Tarjeta" style={{maxWidth:"100%",maxHeight:320,borderRadius:8,border:"1px solid #e5e7eb"}} />
+                    <div style={{fontSize:11,color:"#6b7280",marginTop:6}}>
+                      Enviado: {new Date(req.submittedAt).toLocaleString("es-CL",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}
+                    </div>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {saved && (
         <div style={{backgroundColor:"#f0fdf4",border:"1px solid #86efac",borderRadius:10,padding:"12px 16px",marginBottom:16,textAlign:"center"}}>
