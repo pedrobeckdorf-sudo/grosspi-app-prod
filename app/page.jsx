@@ -1746,7 +1746,8 @@ function ManualEntry({players, allRounds, yearRounds, saveRounds, nav, pending, 
   const [form, setForm] = useState({date:new Date().toISOString().split("T")[0], name:"", playerId:"", scores:Array(18).fill("")});
   const [photo, setPhoto] = useState(null);
   const [saved, setSaved] = useState(false);
-  const [previewReq, setPreviewReq] = useState(null); // pending request being previewed
+  const [previewReq, setPreviewReq] = useState(null);
+  const [lightboxSrc, setLightboxSrc] = useState(null);
 
   const approveRequest = (req) => {
     // Pre-fill the form with the request data and remove from pending
@@ -1818,6 +1819,17 @@ function ManualEntry({players, allRounds, yearRounds, saveRounds, nav, pending, 
 
   return (
     <div style={S.view}>
+      {/* Lightbox */}
+      {lightboxSrc && (
+        <div
+          onClick={()=>setLightboxSrc(null)}
+          style={{position:"fixed",inset:0,backgroundColor:"rgba(0,0,0,0.92)",zIndex:2000,display:"flex",alignItems:"center",justifyContent:"center",padding:16,cursor:"zoom-out"}}
+        >
+          <img src={lightboxSrc} alt="Tarjeta" style={{maxWidth:"100%",maxHeight:"92vh",borderRadius:8,boxShadow:"0 8px 40px rgba(0,0,0,0.6)"}} />
+          <button onClick={()=>setLightboxSrc(null)} style={{position:"absolute",top:16,right:20,background:"none",border:"none",color:"#fff",fontSize:28,cursor:"pointer",lineHeight:1}}>✕</button>
+        </div>
+      )}
+
       <div style={S.hdr}><h1 style={S.title}>Cargar Ronda</h1><p style={S.sub}>Ingresa los scores de cada jugador y opcionalmente adjunta foto de respaldo</p></div>
 
       {/* Pending photo requests */}
@@ -1855,9 +1867,15 @@ function ManualEntry({players, allRounds, yearRounds, saveRounds, nav, pending, 
                 </div>
                 {previewReq?.id===req.id && req.photo && (
                   <div style={{marginTop:10,textAlign:"center"}}>
-                    <img src={req.photo} alt="Tarjeta" style={{maxWidth:"100%",maxHeight:320,borderRadius:8,border:"1px solid #e5e7eb"}} />
-                    <div style={{fontSize:11,color:"#6b7280",marginTop:6}}>
-                      Enviado: {new Date(req.submittedAt).toLocaleString("es-CL",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}
+                    <img
+                      src={req.photo}
+                      alt="Tarjeta"
+                      onClick={e=>{e.stopPropagation();setLightboxSrc(req.photo);}}
+                      style={{maxWidth:"100%",maxHeight:320,borderRadius:8,border:"1px solid #e5e7eb",cursor:"zoom-in"}}
+                      title="Click para ver en grande"
+                    />
+                    <div style={{fontSize:11,color:"#6b7280",marginTop:4}}>
+                      🔍 Toca para ver en grande · Enviado: {new Date(req.submittedAt).toLocaleString("es-CL",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}
                     </div>
                   </div>
                 )}
