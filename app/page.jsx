@@ -1757,7 +1757,6 @@ function ManualEntry({players, allRounds, yearRounds, saveRounds, nav, pending, 
     setPhoto(req.photo);
     setActiveReqId(req.id);
     setPreviewReq(null);
-    setLightboxSrc(req.photo); // open photo immediately so admin can read it
     window.scrollTo(0, 0);
   };
 
