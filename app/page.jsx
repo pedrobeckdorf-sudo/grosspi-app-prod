@@ -1990,9 +1990,15 @@ function ManualEntry({players, allRounds, yearRounds, saveRounds, nav, pending, 
         <h2 style={S.cardTitle}>📷 Foto de Respaldo (opcional)</h2>
         {photo ? (
           <div style={{textAlign:"center"}}>
-            <img src={photo} alt="Tarjeta" style={{maxWidth:"100%",maxHeight:240,borderRadius:10,border:"1px solid #e5e7eb"}} />
+            <img
+              src={photo} alt="Tarjeta"
+              onClick={()=>setLightboxSrc(photo)}
+              style={{maxWidth:"100%",maxHeight:240,borderRadius:10,border:"1px solid #e5e7eb",cursor:"zoom-in"}}
+              title="Click para ver en grande"
+            />
+            <div style={{fontSize:11,color:"#9ca3af",marginTop:4}}>🔍 Toca para ver en grande</div>
             <button
-              style={{...S.btn,...S.btnS,marginTop:10,fontSize:12,padding:"8px 16px"}}
+              style={{...S.btn,...S.btnS,marginTop:8,fontSize:12,padding:"8px 16px"}}
               onClick={()=>setPhoto(null)}
             >✕ Quitar foto</button>
           </div>
