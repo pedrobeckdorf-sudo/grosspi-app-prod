@@ -2170,19 +2170,67 @@ function Stats({ allRounds, players, rankings, year, hcp2026, availableYears }) 
 
   // Compute rankings based on statsYear (independent of menu year)
   const effectiveRankings = useMemo(() => {
+    // Helper: compute last HCP for a player across all rounds up to now
+    const getLastHcp = (pid) => {
+      // Last 2026 round played? Use calcDynamicHcp
+      const rounds2026 = allRounds.filter(r => roundYear(r) >= 2026).sort((a,b) => new Date(a.date||0)-new Date(b.date||0));
+      const played2026 = rounds2026.filter(r => r.scores?.[pid]);
+      if (played2026.length > 0) {
+        const lastIdx = rounds2026.findIndex(r => r.id === played2026[played2026.length-1].id);
+        return calcDynamicHcp(pid, lastIdx + 1, rounds2026, players, hcp2026);
+      }
+      // No 2026 rounds — use HCP inicial 2026 if set
+      if (hcp2026[pid]?.inicial != null) return hcp2026[pid].inicial;
+      // Fall back to last 2025 gross-based HCP
+      const gb = INIT_DATA.annual2025[pid]?.grossPts || {};
+      const grossVals = Object.values(gb);
+      if (grossVals.length > 0) return 36 - grossVals[grossVals.length - 1];
+      return null;
+    };
+
     if (statsYear === "all") {
-      // All rounds combined — use latest year for HCP calc
-      return computeRankingsFromRounds(players, allRounds, Math.max(...availableYears), hcp2026);
+      // Combine 2025 net points + 2026 net points, correct lastHcp
+      return players.map(p => {
+        // 2025 data
+        const a = INIT_DATA.annual2025[p.id];
+        const net2025 = a?.netPts ? Object.values(a.netPts) : [];
+        // 2026 data
+        const rounds2026 = allRounds.filter(r => roundYear(r) >= 2026).sort((a,b) => new Date(a.date||0)-new Date(b.date||0));
+        let net2026 = [], tarj2026 = 0;
+        rounds2026.forEach((r, rIdx) => {
+          if (!r.scores?.[p.id]) return;
+          const hcp = calcDynamicHcp(p.id, rIdx, rounds2026, players, hcp2026);
+          let net = 0;
+          r.scores[p.id].forEach((s, i) => { net += stablefordNet(s, COURSE.pars[i], hcp, COURSE.handicapIndex[i]); });
+          net2026.push(net);
+          tarj2026++;
+        });
+        const netVals = [...net2025, ...net2026];
+        const { total: totalNet, best7: best7Net } = rankingScore(netVals);
+        const tarjetas = (a?.numTarjetas || 0) + tarj2026;
+        return {
+          ...p,
+          totalNet,
+          totalNetAll: netVals.reduce((s,v)=>s+v,0),
+          tarjetas,
+          best7Net,
+          avgNet: best7Net.length > 0 ? totalNet / best7Net.length : 0,
+          currentHcp: getLastHcp(p.id),
+        };
+      }).sort(tiebreaker);
     }
+
     const yr = parseInt(statsYear);
     if (yr === 2025) {
-      // Use pre-computed 2025 annual data (same as App does for year===2025)
       return players.map(p => {
         const a = INIT_DATA.annual2025[p.id];
         const netVals = a?.netPts ? Object.values(a.netPts) : [];
         const grossVals = a?.grossPts ? Object.values(a.grossPts) : [];
         const { total: totalNet, best7: best7Net } = rankingScore(netVals);
         const { total: totalGross, best7: best7Gross } = rankingScore(grossVals);
+        // Last HCP for 2025 = 36 - last grossPts entry
+        const grossArr = Object.values(a?.grossPts || {});
+        const lastHcp2025 = grossArr.length > 0 ? 36 - grossArr[grossArr.length - 1] : null;
         return {
           ...p,
           totalNet, totalGross,
@@ -2196,7 +2244,7 @@ function Stats({ allRounds, players, rankings, year, hcp2026, availableYears }) 
           grossByMonth: a?.grossPts || {},
           strokesByMonth: a?.strokes || {},
           hcpHistory: [],
-          currentHcp: null,
+          currentHcp: lastHcp2025,
         };
       }).sort(tiebreaker);
     }
