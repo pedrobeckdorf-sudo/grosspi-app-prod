@@ -288,16 +288,17 @@ function computeRankingsFromRounds(players, yearRounds, yearNum, hcpData) {
     let tarjetas = 0;
     const netVals = [];
     const grossVals = [];
-    const hcpHistory = []; // [{roundName, hcp}]
+    const hcpHistory = []; // [{roundName, hcp}] — hcp = AFTER that round
 
     yearRounds.forEach((r, rIdx) => {
       if (!r.scores?.[p.id]) return;
       const holes = r.scores[p.id];
-      const hcp = yearNum >= 2026 ? calcDynamicHcp(p.id, rIdx, yearRounds, players, hcpData) : (p.handicap || 18);
+      // HCP used to PLAY this round (before)
+      const hcpForPlay = yearNum >= 2026 ? calcDynamicHcp(p.id, rIdx, yearRounds, players, hcpData) : (p.handicap || 18);
       let netPts = 0, grossPts = 0, strokes = 0;
       holes.forEach((s, i) => {
         if (s > 0) {
-          netPts += stablefordNet(s, COURSE.pars[i], hcp, COURSE.handicapIndex[i]);
+          netPts += stablefordNet(s, COURSE.pars[i], hcpForPlay, COURSE.handicapIndex[i]);
           grossPts += stablefordGross(s, COURSE.pars[i]);
           strokes += s;
         }
@@ -308,7 +309,9 @@ function computeRankingsFromRounds(players, yearRounds, yearNum, hcpData) {
       strokesByMonth[label] = strokes;
       netVals.push(netPts);
       grossVals.push(grossPts);
-      hcpHistory.push({ roundName: label, hcp, roundDate: r.date });
+      // HCP AFTER this round = calcDynamicHcp with rIdx+1
+      const hcpAfter = yearNum >= 2026 ? calcDynamicHcp(p.id, rIdx + 1, yearRounds, players, hcpData) : hcpForPlay;
+      hcpHistory.push({ roundName: label, hcp: hcpAfter, roundDate: r.date });
       tarjetas++;
     });
 
@@ -1093,29 +1096,30 @@ function HcpEvolutionCard({ history, handicap }) {
         )}
       </div>
       <HcpChart history={history} inicial={handicap} />
-      <div style={{display:"flex",gap:5,flexWrap:"wrap",marginTop:10}}>
+      <div style={{display:"flex",gap:5,flexWrap:"wrap",marginTop:10,alignItems:"flex-end"}}>
         {history.map((h,i) => {
           const isLast = i===history.length-1;
           const is25 = h.year===2025;
+          const isIni = h.isInicial || h.roundName?.includes("Inicial");
           return (
             <div key={i} style={{textAlign:"center",padding:"5px 9px",borderRadius:8,minWidth:50,
-              backgroundColor: isLast?(is25?"#1a472a":"#1d4ed8"):"#f9fafb",
-              border: isLast?"none":`1px solid ${is25?"#d1fae5":"#dbeafe"}`}}>
+              backgroundColor: isLast?(is25?"#1a472a":"#1d4ed8"):isIni?"transparent":"#f9fafb",
+              border: isLast?"none":isIni?`2px dashed ${is25?"#1a472a":"#2563eb"}`:`1px solid ${is25?"#d1fae5":"#dbeafe"}`}}>
               <div style={{fontSize:9,marginBottom:1,
-                color:isLast?"rgba(255,255,255,0.7)":(is25?"#6b7280":"#93c5fd"),
-                whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",maxWidth:60}}>
-                {h.roundName.split(" - ")[0]}
+                color:isLast?"rgba(255,255,255,0.7)":isIni?(is25?"#1a472a":"#2563eb"):(is25?"#6b7280":"#93c5fd"),
+                whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",maxWidth:65}}>
+                {isIni ? (h.roundName.includes("2026")?"Ini.2026":"Ini.2025") : h.roundName.split(" - ")[0]}
               </div>
-              <div style={{fontSize:15,fontWeight:800,color:isLast?"#fff":(is25?"#1a472a":"#1d4ed8")}}>{h.hcp}</div>
+              <div style={{fontSize:15,fontWeight:800,color:isLast?"#fff":isIni?(is25?"#1a472a":"#2563eb"):(is25?"#1a472a":"#1d4ed8")}}>{h.hcp}</div>
             </div>
           );
         })}
       </div>
-      {availYears.length > 1 && (
-        <div style={{fontSize:11,color:"#9ca3af",marginTop:8}}>
-          🟢 2025 · 🔵 2026 · ⭐ último HCP = <b>{lastHcp}</b>
-        </div>
-      )}
+      <div style={{fontSize:11,color:"#9ca3af",marginTop:8}}>
+        ◇ HCP Inicial · ● HCP después de cada ronda
+        {availYears.length > 1 && " · 🟢 2025 · 🔵 2026"}
+        {" · ⭐ último = "}<b>{lastHcp}</b>
+      </div>
     </div>
   );
 }
@@ -1211,23 +1215,26 @@ function PlayerDetail({pid, rankings, rounds, allRounds, nav, year, hcp2026, pla
   };
 
   // Full HCP history across ALL years
+  // Full HCP history across ALL years — shows HCP AFTER each round
   const fullHcpHistory = useMemo(() => {
     const history = [];
     const rounds2025 = allSorted.filter(r => roundYear(r) === 2025 && r.scores?.[pid]);
     const rounds2026plus = allSorted.filter(r => roundYear(r) >= 2026);
+
+    // 2025: get2025HcpLocal returns 36-grossPts = HCP AFTER each round ✓
     rounds2025.forEach(r => {
       const hcp = get2025HcpLocal(r.name);
       if (hcp !== null) history.push({ roundName: r.name, hcp, date: r.date, year: 2025 });
     });
-    // 2026+: add initial HCP as anchor point even if no rounds played
+
+    // Add HCP Inicial 2026 as anchor — this is the HCP carried into the 2026 season
     const hcp2026Inicial = hcp2026[pid]?.inicial ?? p.handicap;
-    const has2026Rounds = rounds2026plus.some(r => r.scores?.[pid]);
-    if (!has2026Rounds && hcp2026Inicial != null) {
-      history.push({ roundName: "Inicial 2026", hcp: hcp2026Inicial, date: "2026-01-01", year: 2026 });
-    }
+    history.push({ roundName: "HCP Inicial 2026", hcp: hcp2026Inicial, date: "2026-01-01", year: 2026, isInicial: true });
+
+    // 2026+: use rIdx+1 to get HCP AFTER each round
     rounds2026plus.forEach((r, rIdx) => {
       if (!r.scores?.[pid]) return;
-      const hcp = calcDynamicHcp(pid, rIdx, rounds2026plus, players, hcp2026);
+      const hcp = calcDynamicHcp(pid, rIdx + 1, rounds2026plus, players, hcp2026);
       history.push({ roundName: r.name, hcp, date: r.date, year: roundYear(r) });
     });
     return history;
@@ -2118,17 +2125,18 @@ function HcpChart({ history, inicial }) {
         {vals.map((v, i) => {
           const yr = years[i];
           const isLast = i === lastIdx;
-          const isInicial = history[i]?.roundName === "Inicial 2026";
+          const isInicial = history[i]?.isInicial || history[i]?.roundName?.includes("Inicial");
           const showLabel = i === 0 || isLast || n <= 8 || yearChanges.includes(i) || isInicial;
           const cx = PAD + i * xStep;
           const cy = yScale(v);
+          const iniLabel = history[i]?.roundName?.includes("2026") ? "Ini.26" : "Ini.";
           return (
             <g key={i}>
               {isInicial ? (
-                // Diamond shape for Inicial 2026
+                // Open diamond for inicial points
                 <polygon
                   points={`${cx},${cy-6} ${cx+6},${cy} ${cx},${cy+6} ${cx-6},${cy}`}
-                  fill="#2563eb" stroke="#fff" strokeWidth="1.5"
+                  fill="#fff" stroke={yr===2025?"#1a472a":"#2563eb"} strokeWidth="2"
                 />
               ) : (
                 <circle cx={cx} cy={cy} r={isLast ? 5 : 3}
@@ -2137,13 +2145,14 @@ function HcpChart({ history, inicial }) {
               {showLabel && (
                 <text x={cx} y={cy - (isInicial ? 9 : 7)} textAnchor="middle"
                   fontSize="9" fontWeight={isLast || isInicial ? "bold" : "normal"}
-                  fill={isLast ? "#92400e" : isInicial ? "#1d4ed8" : yr === 2025 ? "#374151" : "#1d4ed8"}>
+                  fill={isLast ? "#92400e" : isInicial ? (yr===2025?"#1a472a":"#1d4ed8") : yr === 2025 ? "#374151" : "#1d4ed8"}>
                   {v}
                 </text>
               )}
               {isInicial && (
-                <text x={cx} y={cy + 16} textAnchor="middle" fontSize="8" fill="#2563eb" fontWeight="600">
-                  Ini.26
+                <text x={cx} y={cy + 16} textAnchor="middle" fontSize="8"
+                  fill={yr===2025?"#1a472a":"#2563eb"} fontWeight="600">
+                  {iniLabel}
                 </text>
               )}
             </g>
@@ -2276,14 +2285,19 @@ function Stats({ allRounds, players, rankings, year, hcp2026, availableYears }) 
     const data = {};
     players.forEach(p => {
       data[p.id] = [];
+      // Add HCP Inicial anchor
+      const h0 = isRound2025(sortedRounds[0]) ? (INIT_DATA.annual2025[p.id] ? p.handicap : null) : (hcp2026[p.id]?.inicial ?? p.handicap);
+      if (h0 != null) data[p.id].push({ roundName: "HCP Inicial", hcp: h0, isInicial: true });
       sortedRounds.forEach((r, rIdx) => {
         if (!r.scores?.[p.id]) return;
         let hcp;
         if (isRound2025(r)) {
+          // 2025: get2025Hcp = 36-grossPts = HCP after that round ✓
           hcp = get2025Hcp(p.id, r.name);
           if (hcp === null) return;
         } else {
-          hcp = calcDynamicHcp(p.id, rIdx, sortedRounds, players, hcp2026);
+          // 2026: rIdx+1 = HCP after this round
+          hcp = calcDynamicHcp(p.id, rIdx + 1, sortedRounds, players, hcp2026);
         }
         data[p.id].push({ roundName: r.name, hcp, date: r.date });
       });
@@ -2291,14 +2305,14 @@ function Stats({ allRounds, players, rankings, year, hcp2026, availableYears }) 
     return data;
   }, [sortedRounds, players, hcp2026, effectiveRankings]);
 
-  // Average HCP per round across all players who played
+  // Average HCP per round — HCP after each round
   const avgHcpPerRound = useMemo(() => {
     return sortedRounds.map((r, rIdx) => {
       const hcps = players
         .filter(p => r.scores?.[p.id])
         .map(p => {
           if (isRound2025(r)) return get2025Hcp(p.id, r.name);
-          return calcDynamicHcp(p.id, rIdx, sortedRounds, players, hcp2026);
+          return calcDynamicHcp(p.id, rIdx + 1, sortedRounds, players, hcp2026);
         })
         .filter(h => h !== null);
       return {
@@ -2396,7 +2410,7 @@ function Stats({ allRounds, players, rankings, year, hcp2026, availableYears }) 
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,flexWrap:"wrap",gap:8}}>
             <div>
               <h2 style={{...S.cardTitle,margin:0}}>📉 Evolución del Handicap</h2>
-              <div style={{fontSize:10,color:"#9ca3af",marginTop:2}}>HCP mostrado = el que se usó para jugar esa ronda (calculado con rondas anteriores)</div>
+              <div style={{fontSize:10,color:"#9ca3af",marginTop:2}}>HCP mostrado = resultado <b>después</b> de cada ronda jugada · primer punto = HCP Inicial</div>
             </div>
             <select style={{...S.input,width:"auto",minWidth:160}}
               value={selPlayer} onChange={e=>setSelPlayer(e.target.value)}>
