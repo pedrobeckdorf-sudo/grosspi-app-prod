@@ -41,9 +41,8 @@ function calcDynamicHcp(playerId, roundIndex, allRounds, players, hcpData) {
   }
   const n = playedHcps.length; // number of rounds played before this one
   if (n === 0) return h0; // T1
-  if (n === 1) { // T2: avg of Inicial and T1, cap +2
-    const avg = Math.round((h0 + playedHcps[0]) / 2);
-    return Math.min(avg, h0 + 2);
+  if (n === 1) { // T2: avg of Inicial and T1, rounded
+    return Math.round((h0 + playedHcps[0]) / 2);
   }
   if (n === 2) return Math.round((h0 + playedHcps[0] + playedHcps[1]) / 3); // T3
   if (n === 3) { // T4: best 3 of [h0, ...playedHcps]
