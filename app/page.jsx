@@ -169,6 +169,17 @@ async function fbSet(path, value) {
   } catch (e) { console.error("fbSet:", e); }
 }
 
+// Atomic multi-path write — prevents race conditions between separate fbSet calls
+// updates = { "grosspi/rounds": [...], "grosspi/pending": [...] }
+async function fbMultiSet(updates) {
+  try {
+    const db = await getDB();
+    if (!db) return;
+    const { ref, update } = await import("firebase/database");
+    await update(ref(db, "/"), updates);
+  } catch (e) { console.error("fbMultiSet:", e); }
+}
+
 async function fbSubscribe(path, callback) {
   try {
     const db = await getDB();
@@ -387,7 +398,12 @@ export default function App() {
         if (firstHcp) firstHcp = false;
       });
       await fbSubscribe(DB.pending, (val) => {
-        setPending(Array.isArray(val) ? val : val ? Object.values(val) : []);
+        // Firebase stores as object with numeric or string keys — convert to array preserving all entries
+        if (!val) { setPending([]); return; }
+        const arr = Array.isArray(val)
+          ? val.filter(Boolean)
+          : Object.values(val).filter(Boolean);
+        setPending(arr);
       });
       // Small delay to let Firebase respond before showing UI
       setTimeout(() => setLoaded(true), 800);
@@ -403,7 +419,19 @@ export default function App() {
   const savePlayers = useCallback(async (p) => { setPlayers(p); await fbSet(DB.players, p); }, []);
   const saveRounds = useCallback(async (r) => { setRounds(r); await fbSet(DB.rounds, r); }, []);
   const saveHcp2026 = useCallback(async (h) => { setHcp2026(h); await fbSet(DB.hcp2026, h); }, []);
-  const savePending = useCallback(async (p) => { setPending(p); await fbSet(DB.pending, p); }, []);
+  const savePending = useCallback(async (arr) => {
+    setPending(arr);
+    // Store as object keyed by ID — Firebase handles objects reliably, arrays get mangled
+    const obj = arr.length > 0 ? Object.fromEntries(arr.map(r => [r.id, r])) : null;
+    await fbSet(DB.pending, obj);
+  }, []);
+  // Atomic: save rounds AND pending in a single Firebase operation (prevents race conditions)
+  const saveRoundsAndPending = useCallback(async (r, arr) => {
+    setRounds(r);
+    setPending(arr);
+    const pendingObj = arr.length > 0 ? Object.fromEntries(arr.map(req => [req.id, req])) : null;
+    await fbMultiSet({ [DB.rounds]: r, [DB.pending]: pendingObj });
+  }, []);
 
   const nav = (v, extra={}) => {
     if (extra.pid) setSelPlayer(extra.pid);
@@ -559,7 +587,7 @@ export default function App() {
         {view==="player-detail" && <PlayerDetail pid={selPlayer} rankings={rankings} rounds={yearRounds} allRounds={rounds} nav={nav} year={year} hcp2026={hcp2026} players={players} />}
         {view==="stats" && <Stats allRounds={rounds} players={players} rankings={rankings} year={year} hcp2026={hcp2026} availableYears={availableYears} />}
         {view==="compare" && <Compare rankings={rankings} cmpIds={cmpIds} setCmpIds={setCmpIds} rounds={yearRounds} allRounds={rounds} players={players} hcp2026={hcp2026} />}
-        {view==="manual" && isAdmin && <ManualEntry players={players} allRounds={rounds} yearRounds={yearRounds} saveRounds={saveRounds} nav={nav} pending={pending} savePending={savePending} />}
+        {view==="manual" && isAdmin && <ManualEntry players={players} allRounds={rounds} yearRounds={yearRounds} saveRounds={saveRounds} saveRoundsAndPending={saveRoundsAndPending} nav={nav} pending={pending} savePending={savePending} />}
         {view==="manual" && !isAdmin && <PlayerPhotoUpload players={players} pending={pending} savePending={savePending} />}
         {view==="reglamento" && <Reglamento hcp2026={hcp2026} saveHcp2026={saveHcp2026} isAdmin={isAdmin} />}
         {view==="settings" && isAdmin && <Settings players={players} savePlayers={savePlayers} rounds={rounds} saveRounds={saveRounds} hcp2026={hcp2026} saveHcp2026={saveHcp2026} />}
@@ -1748,7 +1776,7 @@ const ROUND_NAMES = [
   "Adicional 1","Adicional 2"
 ];
 
-function ManualEntry({players, allRounds, yearRounds, saveRounds, nav, pending, savePending}) {
+function ManualEntry({players, allRounds, yearRounds, saveRounds, saveRoundsAndPending, nav, pending, savePending}) {
   const [form, setForm] = useState({date:new Date().toISOString().split("T")[0], name:"", playerId:"", scores:Array(18).fill("")});
   const [photo, setPhoto] = useState(null);
   const [saved, setSaved] = useState(false);
@@ -1795,34 +1823,40 @@ function ManualEntry({players, allRounds, yearRounds, saveRounds, nav, pending, 
     reader.readAsDataURL(f);
   };
 
-  const save = () => {
+  const save = async () => {
     if (!form.playerId || !form.date) return;
     const scores = form.scores.map(s => parseInt(s)||0);
     if (scores.every(s=>s===0)) return;
-    // Find existing round in current year with same name
+
+    // Build updated rounds
+    let updatedRounds;
     const existing = yearRounds.find(r => r.name === form.name);
     if (existing) {
-      const updated = allRounds.map(r => r.id===existing.id ? {
+      updatedRounds = allRounds.map(r => r.id===existing.id ? {
         ...r,
         date: form.date,
         scores:{...r.scores, [form.playerId]:scores},
         photos: photo ? [...(r.photos||[]), {player:form.playerId, src:photo}] : (r.photos||[])
       } : r);
-      saveRounds(updated);
     } else {
-      saveRounds([...allRounds, {
+      updatedRounds = [...allRounds, {
         id:"r"+Date.now(),
         name:form.name,
         date:form.date,
         scores:{[form.playerId]:scores},
         photos: photo ? [{player:form.playerId, src:photo}] : []
-      }]);
+      }];
     }
-    // Remove the pending request NOW that save succeeded
-    if (activeReqId) {
-      savePending(pending.filter(p => p.id !== activeReqId));
-      setActiveReqId(null);
-    }
+
+    // Build updated pending
+    const updatedPending = activeReqId
+      ? pending.filter(p => p.id !== activeReqId)
+      : pending;
+
+    // Write rounds + pending atomically in one Firebase operation (prevents race conditions)
+    await saveRoundsAndPending(updatedRounds, updatedPending);
+
+    if (activeReqId) setActiveReqId(null);
     setSaved(true);
     setTimeout(() => setSaved(false), 2500);
     setForm({...form, playerId:"", scores:Array(18).fill("")});
