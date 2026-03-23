@@ -1876,7 +1876,7 @@ function ManualEntry({players, allRounds, yearRounds, saveRounds, saveRoundsAndP
     const scores = form.scores.map(s => parseInt(s)||0);
     if (scores.every(s=>s===0)) return;
 
-    // Build updated rounds (keep photos in local state only — too large for Firebase)
+    // Build updated rounds
     let updatedRounds;
     const existing = yearRounds.find(r => r.name === form.name);
     if (existing) {
@@ -1896,27 +1896,14 @@ function ManualEntry({players, allRounds, yearRounds, saveRounds, saveRoundsAndP
       }];
     }
 
-    // Strip photos from rounds before writing to Firebase (photos are local display only)
-    const roundsForDB = updatedRounds.map(r => {
-      const { photos, ...rest } = r;
-      return rest;
-    });
-
     // Build updated pending
     const updatedPending = activeReqId
       ? pending.filter(p => p.id !== activeReqId)
       : pending;
-    const pendingObj = updatedPending.length > 0
-      ? Object.fromEntries(updatedPending.map(req => [req.id, req]))
-      : null;
 
-    // Update local state immediately
-    setRounds(updatedRounds);
-    setPending(updatedPending);
-
-    // Write rounds and pending as two separate Firebase calls (each well within size limits)
-    await fbSet(DB.rounds, roundsForDB);
-    await fbSet(DB.pending, pendingObj);
+    // saveRounds strips photos before Firebase write; savePending stores as keyed object
+    await saveRounds(updatedRounds);
+    await savePending(updatedPending);
 
     if (activeReqId) setActiveReqId(null);
     setSaved(true);
