@@ -422,7 +422,12 @@ export default function App() {
   }, []);
 
   const savePlayers = useCallback(async (p) => { setPlayers(p); await fbSet(DB.players, p); }, []);
-  const saveRounds = useCallback(async (r) => { setRounds(r); await fbSet(DB.rounds, r); }, []);
+  const saveRounds = useCallback(async (r) => {
+    setRounds(r);
+    // Strip photos before writing — too large for Firebase, local display only
+    const forDB = r.map(({ photos, ...rest }) => rest);
+    await fbSet(DB.rounds, forDB);
+  }, []);
   const saveHcp2026 = useCallback(async (h) => { setHcp2026(h); await fbSet(DB.hcp2026, h); }, []);
   const savePending = useCallback(async (arr) => {
     setPending(arr);
@@ -1668,8 +1673,7 @@ function Compare({rankings, cmpIds, setCmpIds, rounds, allRounds, players, hcp20
 }
 
 // ======== UPLOAD ========
-// ======== COMPRESS PHOTO — reduces base64 size before Firebase storage ========
-// Firebase has ~256KB write limit; phone photos can be 2-5MB uncompressed
+// Compress photo for DISPLAY (preview while entering scores)
 function compressPhoto(file, maxDim = 900, quality = 0.65) {
   return new Promise((resolve) => {
     const reader = new FileReader();
@@ -1690,6 +1694,23 @@ function compressPhoto(file, maxDim = 900, quality = 0.65) {
   });
 }
 
+// Compress photo for FIREBASE STORAGE — very small, just enough to read scorecard
+function compressPhotoForDB(dataUrl) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const scale = Math.min(1, 500 / Math.max(img.width, img.height));
+      const w = Math.round(img.width * scale);
+      const h = Math.round(img.height * scale);
+      const canvas = document.createElement("canvas");
+      canvas.width = w; canvas.height = h;
+      canvas.getContext("2d").drawImage(img, 0, 0, w, h);
+      resolve(canvas.toDataURL("image/jpeg", 0.4));
+    };
+    img.src = dataUrl;
+  });
+}
+
 // ======== PLAYER PHOTO UPLOAD (jugadores) ========
 function PlayerPhotoUpload({ players, pending, savePending }) {
   const [form, setForm] = useState({ date: new Date().toISOString().split("T")[0], name: "", playerId: "" });
@@ -1702,15 +1723,17 @@ function PlayerPhotoUpload({ players, pending, savePending }) {
     setPhoto(compressed);
   };
 
-  const submit = () => {
+  const submit = async () => {
     if (!form.playerId || !form.name || !form.date || !photo) return;
+    // Compress further for Firebase storage (~10-20KB)
+    const photoForDB = await compressPhotoForDB(photo);
     const newEntry = {
       id: "req" + Date.now(),
       roundName: form.name,
       date: form.date,
       playerId: form.playerId,
       playerName: players.find(p => p.id === form.playerId)?.name || form.playerId,
-      photo,
+      photo: photoForDB,
       submittedAt: new Date().toISOString(),
       status: "pending"
     };
@@ -1853,7 +1876,7 @@ function ManualEntry({players, allRounds, yearRounds, saveRounds, saveRoundsAndP
     const scores = form.scores.map(s => parseInt(s)||0);
     if (scores.every(s=>s===0)) return;
 
-    // Build updated rounds
+    // Build updated rounds (keep photos in local state only — too large for Firebase)
     let updatedRounds;
     const existing = yearRounds.find(r => r.name === form.name);
     if (existing) {
@@ -1873,13 +1896,27 @@ function ManualEntry({players, allRounds, yearRounds, saveRounds, saveRoundsAndP
       }];
     }
 
+    // Strip photos from rounds before writing to Firebase (photos are local display only)
+    const roundsForDB = updatedRounds.map(r => {
+      const { photos, ...rest } = r;
+      return rest;
+    });
+
     // Build updated pending
     const updatedPending = activeReqId
       ? pending.filter(p => p.id !== activeReqId)
       : pending;
+    const pendingObj = updatedPending.length > 0
+      ? Object.fromEntries(updatedPending.map(req => [req.id, req]))
+      : null;
 
-    // Write rounds + pending atomically in one Firebase operation (prevents race conditions)
-    await saveRoundsAndPending(updatedRounds, updatedPending);
+    // Update local state immediately
+    setRounds(updatedRounds);
+    setPending(updatedPending);
+
+    // Write rounds and pending as two separate Firebase calls (each well within size limits)
+    await fbSet(DB.rounds, roundsForDB);
+    await fbSet(DB.pending, pendingObj);
 
     if (activeReqId) setActiveReqId(null);
     setSaved(true);
