@@ -213,7 +213,7 @@ function lsSet(key, val) {
 }
 
 // DB paths
-const DB = { players: "grosspi/players", rounds: "grosspi/rounds", hcp2026: "grosspi/hcp2026", pending: "grosspi/pending" };
+const DB = { players: "grosspi/players", rounds: "grosspi/rounds", hcp2026: "grosspi/hcp2026", pending: "grosspi/pending", roundPhotos: "grosspi/roundPhotos" };
 const LS = { role: "grosspi:role" };
 
 const ADMIN_PIN = "Sbv1240";
@@ -359,6 +359,7 @@ export default function App() {
   const [rounds, setRounds] = useState(INIT_DATA.rounds);
   const [hcp2026, setHcp2026] = useState(HCP_2026_DEFAULT);
   const [pending, setPending] = useState([]);
+  const [roundPhotos, setRoundPhotos] = useState({}); // { [roundId]: [{player, src}] }
   const [view, setView] = useState("dashboard");
   const [selPlayer, setSelPlayer] = useState(null);
   const [selRound, setSelRound] = useState(null);
@@ -410,6 +411,10 @@ export default function App() {
           : Object.values(val).filter(Boolean);
         setPending(arr);
       });
+      await fbSubscribe(DB.roundPhotos, (val) => {
+        // { roundId: [{player, src}, ...] }
+        setRoundPhotos(val || {});
+      });
       // Small delay to let Firebase respond before showing UI
       setTimeout(() => setLoaded(true), 800);
     })();
@@ -424,7 +429,7 @@ export default function App() {
   const savePlayers = useCallback(async (p) => { setPlayers(p); await fbSet(DB.players, p); }, []);
   const saveRounds = useCallback(async (r) => {
     setRounds(r);
-    // Strip photos before writing — too large for Firebase, local display only
+    // Strip photos before writing — stored separately in roundPhotos
     const forDB = r.map(({ photos, ...rest }) => rest);
     await fbSet(DB.rounds, forDB);
   }, []);
@@ -434,6 +439,10 @@ export default function App() {
     // Store as object keyed by ID — Firebase handles objects reliably, arrays get mangled
     const obj = arr.length > 0 ? Object.fromEntries(arr.map(r => [r.id, r])) : null;
     await fbSet(DB.pending, obj);
+  }, []);
+  const saveRoundPhotos = useCallback(async (updated) => {
+    setRoundPhotos(updated);
+    await fbSet(DB.roundPhotos, Object.keys(updated).length > 0 ? updated : null);
   }, []);
   // Atomic: save rounds AND pending in a single Firebase operation (prevents race conditions)
   const saveRoundsAndPending = useCallback(async (r, arr) => {
@@ -592,12 +601,12 @@ export default function App() {
       <main style={S.main}>
         {view==="dashboard" && <Dashboard rankings={rankings} rounds={yearRounds} nav={nav} annual={year===2025?INIT_DATA.annual2025:null} players={players} year={year} hcp2026={hcp2026} isAdmin={isAdmin} />}
         {view==="rounds" && <Rounds rounds={yearRounds} players={players} nav={nav} year={year} hcp2026={hcp2026} isAdmin={isAdmin} saveRounds={saveRounds} allRounds={rounds} />}
-        {view==="round-detail" && <RoundDetail rid={selRound} rounds={rounds} players={players} nav={nav} year={year} hcp2026={hcp2026} allYearRounds={yearRounds} isAdmin={isAdmin} saveRounds={saveRounds} allRounds={rounds} />}
+        {view==="round-detail" && <RoundDetail rid={selRound} rounds={rounds} players={players} nav={nav} year={year} hcp2026={hcp2026} allYearRounds={yearRounds} isAdmin={isAdmin} saveRounds={saveRounds} allRounds={rounds} roundPhotos={roundPhotos} saveRoundPhotos={saveRoundPhotos} />}
         {view==="players" && <Players rankings={rankings} nav={nav} year={year} hcp2026={hcp2026} />}
         {view==="player-detail" && <PlayerDetail pid={selPlayer} rankings={rankings} rounds={yearRounds} allRounds={rounds} nav={nav} year={year} hcp2026={hcp2026} players={players} />}
         {view==="stats" && <Stats allRounds={rounds} players={players} rankings={rankings} year={year} hcp2026={hcp2026} availableYears={availableYears} />}
         {view==="compare" && <Compare rankings={rankings} cmpIds={cmpIds} setCmpIds={setCmpIds} rounds={yearRounds} allRounds={rounds} players={players} hcp2026={hcp2026} />}
-        {view==="manual" && isAdmin && <ManualEntry players={players} allRounds={rounds} yearRounds={yearRounds} saveRounds={saveRounds} saveRoundsAndPending={saveRoundsAndPending} nav={nav} pending={pending} savePending={savePending} />}
+        {view==="manual" && isAdmin && <ManualEntry players={players} allRounds={rounds} yearRounds={yearRounds} saveRounds={saveRounds} saveRoundsAndPending={saveRoundsAndPending} nav={nav} pending={pending} savePending={savePending} roundPhotos={roundPhotos} saveRoundPhotos={saveRoundPhotos} />}
         {view==="manual" && !isAdmin && <PlayerPhotoUpload players={players} pending={pending} savePending={savePending} />}
         {view==="reglamento" && <Reglamento hcp2026={hcp2026} saveHcp2026={saveHcp2026} isAdmin={isAdmin} />}
         {view==="settings" && isAdmin && <Settings players={players} savePlayers={savePlayers} rounds={rounds} saveRounds={saveRounds} hcp2026={hcp2026} saveHcp2026={saveHcp2026} />}
@@ -853,7 +862,7 @@ function EditableScorecard({ entry: e, isAdmin, round, rid, allRounds, saveRound
 }
 
 // ======== ROUND DETAIL ========
-function RoundDetail({rid, rounds, players, nav, year, hcp2026, allYearRounds, isAdmin, saveRounds, allRounds}) {
+function RoundDetail({rid, rounds, players, nav, year, hcp2026, allYearRounds, isAdmin, saveRounds, allRounds, roundPhotos, saveRoundPhotos}) {
   const round = rounds.find(r=>r.id===rid);
   if (!round) return <div style={S.empty}>Ronda no encontrada</div>;
 
@@ -870,6 +879,12 @@ function RoundDetail({rid, rounds, players, nav, year, hcp2026, allYearRounds, i
   const handleDeleteRound = () => {
     if (!confirm(`¿Eliminar la ronda "${round.name}" completa? Esta acción no se puede deshacer.`)) return;
     saveRounds(allRounds.filter(r => r.id !== rid));
+    // Also remove photos for this round
+    if (saveRoundPhotos && roundPhotos) {
+      const updated = {...roundPhotos};
+      delete updated[rid];
+      saveRoundPhotos(updated);
+    }
     nav("rounds");
   };
 
@@ -878,9 +893,15 @@ function RoundDetail({rid, rounds, players, nav, year, hcp2026, allYearRounds, i
     if (!confirm(`¿Eliminar el score de ${p?.name} de esta ronda?`)) return;
     const newScores = {...round.scores};
     delete newScores[pid];
-    const newPhotos = (round.photos || []).filter(ph => ph.player !== pid);
-    const updated = allRounds.map(r => r.id === rid ? {...r, scores: newScores, photos: newPhotos} : r);
+    const updated = allRounds.map(r => r.id === rid ? {...r, scores: newScores} : r);
     saveRounds(updated);
+    // Also remove photo for this player in this round
+    if (saveRoundPhotos && roundPhotos) {
+      const currentPhotos = roundPhotos[rid] || [];
+      const newPhotos = currentPhotos.filter(ph => ph.player !== pid);
+      const updatedPhotos = {...roundPhotos, [rid]: newPhotos};
+      saveRoundPhotos(updatedPhotos);
+    }
   };
 
   const board = useMemo(() => {
@@ -1012,7 +1033,7 @@ function RoundDetail({rid, rounds, players, nav, year, hcp2026, allYearRounds, i
       </div>
 
       {/* Photo Gallery */}
-      <PhotoGallery photos={round.photos || []} players={players} />
+      <PhotoGallery photos={(roundPhotos && roundPhotos[rid]) || []} players={players} />
     </div>
   );
 }
@@ -1825,7 +1846,7 @@ const ROUND_NAMES = [
   "Adicional 1","Adicional 2"
 ];
 
-function ManualEntry({players, allRounds, yearRounds, saveRounds, saveRoundsAndPending, nav, pending, savePending}) {
+function ManualEntry({players, allRounds, yearRounds, saveRounds, saveRoundsAndPending, nav, pending, savePending, roundPhotos, saveRoundPhotos}) {
   const [form, setForm] = useState({date:new Date().toISOString().split("T")[0], name:"", playerId:"", scores:Array(18).fill("")});
   const [photo, setPhoto] = useState(null);
   const [saved, setSaved] = useState(false);
@@ -1876,24 +1897,36 @@ function ManualEntry({players, allRounds, yearRounds, saveRounds, saveRoundsAndP
     const scores = form.scores.map(s => parseInt(s)||0);
     if (scores.every(s=>s===0)) return;
 
-    // Build updated rounds
+    // Build updated rounds (WITHOUT photos — stored separately in roundPhotos)
     let updatedRounds;
+    let roundId;
     const existing = yearRounds.find(r => r.name === form.name);
     if (existing) {
+      roundId = existing.id;
       updatedRounds = allRounds.map(r => r.id===existing.id ? {
         ...r,
         date: form.date,
-        scores:{...r.scores, [form.playerId]:scores},
-        photos: photo ? [...(r.photos||[]), {player:form.playerId, src:photo}] : (r.photos||[])
+        scores:{...r.scores, [form.playerId]:scores}
       } : r);
     } else {
+      roundId = "r"+Date.now();
       updatedRounds = [...allRounds, {
-        id:"r"+Date.now(),
-        name:form.name,
-        date:form.date,
-        scores:{[form.playerId]:scores},
-        photos: photo ? [{player:form.playerId, src:photo}] : []
+        id: roundId,
+        name: form.name,
+        date: form.date,
+        scores:{[form.playerId]:scores}
       }];
+    }
+
+    // Save photo separately in roundPhotos node (persists across sessions)
+    if (photo && saveRoundPhotos) {
+      const photoForDB = await compressPhotoForDB(photo);
+      const currentPhotos = ((roundPhotos || {})[roundId] || []).filter(p => p.player !== form.playerId);
+      const updatedPhotos = {
+        ...(roundPhotos || {}),
+        [roundId]: [...currentPhotos, {player: form.playerId, src: photoForDB}]
+      };
+      await saveRoundPhotos(updatedPhotos);
     }
 
     // Build updated pending
@@ -1901,7 +1934,6 @@ function ManualEntry({players, allRounds, yearRounds, saveRounds, saveRoundsAndP
       ? pending.filter(p => p.id !== activeReqId)
       : pending;
 
-    // saveRounds strips photos before Firebase write; savePending stores as keyed object
     await saveRounds(updatedRounds);
     await savePending(updatedPending);
 
