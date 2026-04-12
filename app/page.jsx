@@ -1715,18 +1715,18 @@ function compressPhoto(file, maxDim = 900, quality = 0.65) {
   });
 }
 
-// Compress photo for FIREBASE STORAGE — very small, just enough to read scorecard
+// Compress photo for FIREBASE STORAGE — legible scorecard, ~60-80KB
 function compressPhotoForDB(dataUrl) {
   return new Promise((resolve) => {
     const img = new Image();
     img.onload = () => {
-      const scale = Math.min(1, 500 / Math.max(img.width, img.height));
+      const scale = Math.min(1, 800 / Math.max(img.width, img.height));
       const w = Math.round(img.width * scale);
       const h = Math.round(img.height * scale);
       const canvas = document.createElement("canvas");
       canvas.width = w; canvas.height = h;
       canvas.getContext("2d").drawImage(img, 0, 0, w, h);
-      resolve(canvas.toDataURL("image/jpeg", 0.4));
+      resolve(canvas.toDataURL("image/jpeg", 0.65));
     };
     img.src = dataUrl;
   });
