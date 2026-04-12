@@ -370,19 +370,22 @@ export default function App() {
   const [role, setRole] = useState(null); // null = not logged in, "player" | "admin"
   const [updateReady, setUpdateReady] = useState(false);
 
-  // Detect when a new deploy is available — poll /_next/static every 30s
+  // Detect when a new deploy is available — poll / every 30s comparing ETag
   useEffect(() => {
+    const KEY = "grosspi_build_etag";
     const checkUpdate = async () => {
       try {
         const res = await fetch("/", { method: "HEAD", cache: "no-store" });
-        const newEtag = res.headers.get("etag") || res.headers.get("last-modified");
-        const stored = sessionStorage.getItem("grosspi_etag");
-        if (stored && newEtag && stored !== newEtag) setUpdateReady(true);
-        if (newEtag && !stored) sessionStorage.setItem("grosspi_etag", newEtag);
+        const etag = res.headers.get("etag") || res.headers.get("last-modified");
+        if (!etag) return;
+        const stored = localStorage.getItem(KEY);
+        if (!stored) { localStorage.setItem(KEY, etag); return; }
+        if (stored !== etag) setUpdateReady(true);
       } catch {}
     };
-    const id = setInterval(checkUpdate, 30000);
+    // Store current etag on first load, then poll for changes
     checkUpdate();
+    const id = setInterval(checkUpdate, 30000);
     return () => clearInterval(id);
   }, []);
 
@@ -552,7 +555,7 @@ export default function App() {
       {updateReady && (
         <div style={{position:"fixed",top:0,left:0,right:0,zIndex:9999,background:"#16a34a",color:"#fff",textAlign:"center",padding:"10px 16px",fontSize:14,display:"flex",alignItems:"center",justifyContent:"center",gap:12}}>
           <span>🔄 Nueva versión disponible</span>
-          <button onClick={()=>window.location.reload()} style={{background:"#fff",color:"#16a34a",border:"none",borderRadius:6,padding:"4px 14px",fontWeight:700,cursor:"pointer",fontSize:13}}>Actualizar</button>
+          <button onClick={()=>{ localStorage.removeItem("grosspi_build_etag"); window.location.reload(); }} style={{background:"#fff",color:"#16a34a",border:"none",borderRadius:6,padding:"4px 14px",fontWeight:700,cursor:"pointer",fontSize:13}}>Actualizar</button>
         </div>
       )}
       {/* Mobile hamburger — always visible on mobile */}
