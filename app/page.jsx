@@ -369,18 +369,6 @@ export default function App() {
   const [year, setYear] = useState(2026);
   const [role, setRole] = useState(null); // null = not logged in, "player" | "admin"
 
-  // Register service worker for chunk error recovery
-  useEffect(() => {
-    if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('/sw.js').catch(() => {});
-      navigator.serviceWorker.addEventListener('message', e => {
-        if (e.data?.type === 'CHUNK_ERROR') {
-          window.location.reload(true);
-        }
-      });
-    }
-  }, []);
-
   const isAdmin = role === "admin";
 
   const handleLogin = (r) => {
@@ -1727,18 +1715,18 @@ function compressPhoto(file, maxDim = 900, quality = 0.65) {
   });
 }
 
-// Compress photo for FIREBASE STORAGE — legible scorecard, ~60-80KB
+// Compress photo for FIREBASE STORAGE — legible scorecard, ~120-150KB
 function compressPhotoForDB(dataUrl) {
   return new Promise((resolve) => {
     const img = new Image();
     img.onload = () => {
-      const scale = Math.min(1, 800 / Math.max(img.width, img.height));
+      const scale = Math.min(1, 1200 / Math.max(img.width, img.height));
       const w = Math.round(img.width * scale);
       const h = Math.round(img.height * scale);
       const canvas = document.createElement("canvas");
       canvas.width = w; canvas.height = h;
       canvas.getContext("2d").drawImage(img, 0, 0, w, h);
-      resolve(canvas.toDataURL("image/jpeg", 0.65));
+      resolve(canvas.toDataURL("image/jpeg", 0.75));
     };
     img.src = dataUrl;
   });
