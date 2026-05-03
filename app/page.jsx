@@ -959,6 +959,19 @@ function RoundDetail({rid, rounds, players, nav, year, hcp2026, allYearRounds, i
             <div>
               <h1 style={S.title}>{round.name}</h1>
               <p style={S.sub}>{round.date ? new Date(round.date).toLocaleDateString("es-CL",{weekday:"long",day:"numeric",month:"long",year:"numeric"}) : ""}</p>
+              {isAdmin && round.scores_log && (() => {
+                const logs = Object.values(round.scores_log);
+                if (!logs.length) return null;
+                const sorted = logs.map(l=>l.loadedAt).filter(Boolean).sort();
+                const last = sorted[sorted.length-1];
+                const total = Object.keys(round.scores||{}).length;
+                const loaded = logs.length;
+                return (
+                  <p style={{fontSize:12,color:"#6b7280",marginTop:4}}>
+                    📋 {loaded}/{total} scores cargados · último: {new Date(last).toLocaleDateString("es-CL",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}
+                  </p>
+                );
+              })()}
             </div>
             {isAdmin && (
               <div style={{display:"flex",gap:8,flexShrink:0}}>
@@ -985,6 +998,7 @@ function RoundDetail({rid, rounds, players, nav, year, hcp2026, allYearRounds, i
         <div style={S.tblWrap}><table style={S.tbl}><thead><tr>
           <th style={S.th}>#</th><th style={{...S.th,textAlign:"left"}}>Jugador</th><th style={S.th}>HCP</th><th style={S.th}>Golpes</th>
           <th style={{...S.th,color:"#4a6741"}}>Pts Neto</th><th style={S.th}>Pts Gross</th>
+          {isAdmin && <th style={{...S.th,fontSize:11,color:"#9ca3af"}}>Cargado</th>}
           {isAdmin && <th style={S.th}></th>}
         </tr></thead><tbody>
           {board.map((e,i) => {
@@ -1005,6 +1019,14 @@ function RoundDetail({rid, rounds, players, nav, year, hcp2026, allYearRounds, i
                   <td style={S.td}>{e.totalStrokes}</td>
                   <td style={{...S.td,fontWeight:800,color:"#1a472a",fontSize:16}}>{e.netPts}</td>
                   <td style={S.td}>{e.grossPts}</td>
+                  {isAdmin && (() => {
+                    const log = round.scores_log?.[e.player.id];
+                    if (!log) return <td style={{...S.td,fontSize:10,color:"#d1d5db"}}>—</td>;
+                    const d = new Date(log.loadedAt);
+                    const label = d.toLocaleDateString("es-CL",{day:"numeric",month:"short"});
+                    const icon = log.source === "pending" ? "📱" : "⌨️";
+                    return <td style={{...S.td,fontSize:10,color:"#6b7280",whiteSpace:"nowrap"}}>{icon} {label}</td>;
+                  })()}
                   {isAdmin && (
                     <td style={S.td}>
                       <button
@@ -1208,6 +1230,11 @@ function RoundHistoryCard({ roundHistory, rounds, pid, p, year, players, hcp2026
               {isBest && <span style={{fontSize:10,padding:"1px 6px",borderRadius:8,backgroundColor:"#f0f7f0",color:"#1a472a",fontWeight:700}}>⭐ Best</span>}
               <span style={{fontSize:12,color:"#6b7280"}}>{rh.strokes} golpes</span>
               <span style={{fontWeight:800,fontSize:15,color:"#1a472a",minWidth:28,textAlign:"right"}}>{rh.netPts} pts</span>
+              {rh.loadedAt && (
+                <span style={{fontSize:10,color:"#9ca3af",whiteSpace:"nowrap",marginLeft:4}} title={`Fuente: ${rh.loadSource==="pending"?"jugador":"admin"}`}>
+                  {rh.loadSource==="pending"?"📱":"⌨️"} {new Date(rh.loadedAt).toLocaleDateString("es-CL",{day:"numeric",month:"short"})}
+                </span>
+              )}
             </div>
             {isOpen && holes.length > 0 && (
               <div style={{overflowX:"auto",paddingBottom:10,backgroundColor:"#f8fdf8",borderRadius:6,margin:"0 0 4px"}}>
@@ -1324,7 +1351,7 @@ function PlayerDetail({pid, rankings, rounds, allRounds, nav, year, hcp2026, pla
           else doubles++;
         }
       });
-      roundHistory.push({date:r.date, name:r.name, netPts:rNet, grossPts:rGross, strokes:rStrokes, rid:r.id});
+      roundHistory.push({date:r.date, name:r.name, netPts:rNet, grossPts:rGross, strokes:rStrokes, rid:r.id, loadedAt:r.scores_log?.[pid]?.loadedAt, loadSource:r.scores_log?.[pid]?.source});
     });
     return {birdies, pars, bogeys, doubles, eagles, holesPlayed,
       holeAverages: holeAvg.map((s,i) => holeCounts[i] ? s/holeCounts[i] : 0),
@@ -1903,18 +1930,22 @@ function ManualEntry({players, allRounds, yearRounds, saveRounds, saveRoundsAndP
     const existing = yearRounds.find(r => r.name === form.name);
     if (existing) {
       roundId = existing.id;
+      const logEntry = { loadedAt: new Date().toISOString(), source: activeReqId ? "pending" : "admin" };
       updatedRounds = allRounds.map(r => r.id===existing.id ? {
         ...r,
         date: form.date,
-        scores:{...r.scores, [form.playerId]:scores}
+        scores:{...r.scores, [form.playerId]:scores},
+        scores_log:{...(r.scores_log||{}), [form.playerId]: logEntry}
       } : r);
     } else {
       roundId = "r"+Date.now();
+      const logEntry = { loadedAt: new Date().toISOString(), source: activeReqId ? "pending" : "admin" };
       updatedRounds = [...allRounds, {
         id: roundId,
         name: form.name,
         date: form.date,
-        scores:{[form.playerId]:scores}
+        scores:{[form.playerId]:scores},
+        scores_log:{[form.playerId]: logEntry}
       }];
     }
 
@@ -1983,6 +2014,7 @@ function ManualEntry({players, allRounds, yearRounds, saveRounds, saveRoundsAndP
                     <span style={{fontWeight:700,color:"#1a472a",fontSize:14}}>{req.playerName}</span>
                     <span style={{color:"#6b7280",fontSize:12,marginLeft:8}}>{req.roundName}</span>
                     <span style={{color:"#9ca3af",fontSize:11,marginLeft:8}}>{req.date ? new Date(req.date).toLocaleDateString("es-CL",{day:"numeric",month:"short"}) : ""}</span>
+                    {req.submittedAt && <span style={{color:"#9ca3af",fontSize:10,marginLeft:8}}>📱 enviado {new Date(req.submittedAt).toLocaleDateString("es-CL",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}</span>}
                   </div>
                   <div style={{display:"flex",gap:6}}>
                     <button onClick={e=>{e.stopPropagation();approveRequest(req);}}
