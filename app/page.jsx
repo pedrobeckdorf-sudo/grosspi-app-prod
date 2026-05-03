@@ -1022,10 +1022,11 @@ function RoundDetail({rid, rounds, players, nav, year, hcp2026, allYearRounds, i
                   <td style={S.td}>{e.grossPts}</td>
                   {isAdmin && (() => {
                     const log = round.scores_log?.[e.player.id];
-                    const playedDate = log?.playedAt || null;
+                    const playedDate = log?.playedAt || round.date || null;
                     if (!playedDate) return <td style={{...S.td,fontSize:10,color:"#d1d5db"}}>—</td>;
-                    return <td style={{...S.td,fontSize:10,color:"#6b7280",whiteSpace:"nowrap"}}>
-                      {new Date(playedDate).toLocaleDateString("es-CL",{day:"numeric",month:"short"})}
+                    const isExact = !!log?.playedAt;
+                    return <td style={{...S.td,fontSize:10,color:isExact?"#6b7280":"#9ca3af",whiteSpace:"nowrap"}}>
+                      {!isExact && <span title="Fecha de la ronda, no individual">~</span>}{new Date(playedDate).toLocaleDateString("es-CL",{day:"numeric",month:"short"})}
                     </td>;
                   })()}
                   {isAdmin && (() => {
@@ -1239,7 +1240,7 @@ function RoundHistoryCard({ roundHistory, rounds, pid, p, year, players, hcp2026
                 <div style={{fontWeight:600,fontSize:13,color:"#1a472a"}}>{rh.name}</div>
                 {(rh.playedAt || rh.loadedAt) && (
                   <div style={{fontSize:10,color:"#9ca3af",marginTop:1}}>
-                    {rh.playedAt && <>🗓 jugado {new Date(rh.playedAt).toLocaleDateString("es-CL",{day:"numeric",month:"short"})}</>}
+                    {rh.playedAt && <>{!rh.playedExact && <span title="Fecha de la ronda, no individual">~</span>}🗓 jugado {new Date(rh.playedAt).toLocaleDateString("es-CL",{day:"numeric",month:"short"})}</>}
                     {rh.playedAt && rh.loadedAt && <span style={{margin:"0 4px"}}>·</span>}
                     {rh.loadedAt && <>{rh.loadSource==="pending"?"📱":"⌨️"} cargado {new Date(rh.loadedAt).toLocaleDateString("es-CL",{day:"numeric",month:"short"})}</>}
                   </div>
@@ -1364,7 +1365,7 @@ function PlayerDetail({pid, rankings, rounds, allRounds, nav, year, hcp2026, pla
           else doubles++;
         }
       });
-      roundHistory.push({date:r.date, name:r.name, netPts:rNet, grossPts:rGross, strokes:rStrokes, rid:r.id, playedAt:r.scores_log?.[pid]?.playedAt, loadedAt:r.scores_log?.[pid]?.loadedAt, loadSource:r.scores_log?.[pid]?.source});
+      roundHistory.push({date:r.date, name:r.name, netPts:rNet, grossPts:rGross, strokes:rStrokes, rid:r.id, playedAt:r.scores_log?.[pid]?.playedAt || r.date, playedExact:!!r.scores_log?.[pid]?.playedAt, loadedAt:r.scores_log?.[pid]?.loadedAt, loadSource:r.scores_log?.[pid]?.source});
     });
     return {birdies, pars, bogeys, doubles, eagles, holesPlayed,
       holeAverages: holeAvg.map((s,i) => holeCounts[i] ? s/holeCounts[i] : 0),
