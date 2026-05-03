@@ -998,7 +998,7 @@ function RoundDetail({rid, rounds, players, nav, year, hcp2026, allYearRounds, i
         <div style={S.tblWrap}><table style={S.tbl}><thead><tr>
           <th style={S.th}>#</th><th style={{...S.th,textAlign:"left"}}>Jugador</th><th style={S.th}>HCP</th><th style={S.th}>Golpes</th>
           <th style={{...S.th,color:"#4a6741"}}>Pts Neto</th><th style={S.th}>Pts Gross</th>
-          {isAdmin && <th style={{...S.th,fontSize:11,color:"#9ca3af"}}>Jugado</th>}
+          <th style={{...S.th,fontSize:11,color:"#9ca3af"}}>Jugado</th>
           {isAdmin && <th style={{...S.th,fontSize:11,color:"#9ca3af"}}>Cargado</th>}
           {isAdmin && <th style={S.th}></th>}
         </tr></thead><tbody>
@@ -1020,7 +1020,7 @@ function RoundDetail({rid, rounds, players, nav, year, hcp2026, allYearRounds, i
                   <td style={S.td}>{e.totalStrokes}</td>
                   <td style={{...S.td,fontWeight:800,color:"#1a472a",fontSize:16}}>{e.netPts}</td>
                   <td style={S.td}>{e.grossPts}</td>
-                  {isAdmin && (() => {
+                  {(() => {
                     const log = round.scores_log?.[e.player.id];
                     const playedDate = log?.playedAt || round.date || null;
                     if (!playedDate) return <td style={{...S.td,fontSize:10,color:"#d1d5db"}}>—</td>;
