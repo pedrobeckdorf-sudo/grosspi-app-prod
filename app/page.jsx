@@ -998,6 +998,7 @@ function RoundDetail({rid, rounds, players, nav, year, hcp2026, allYearRounds, i
         <div style={S.tblWrap}><table style={S.tbl}><thead><tr>
           <th style={S.th}>#</th><th style={{...S.th,textAlign:"left"}}>Jugador</th><th style={S.th}>HCP</th><th style={S.th}>Golpes</th>
           <th style={{...S.th,color:"#4a6741"}}>Pts Neto</th><th style={S.th}>Pts Gross</th>
+          {isAdmin && <th style={{...S.th,fontSize:11,color:"#9ca3af"}}>Jugado</th>}
           {isAdmin && <th style={{...S.th,fontSize:11,color:"#9ca3af"}}>Cargado</th>}
           {isAdmin && <th style={S.th}></th>}
         </tr></thead><tbody>
@@ -1019,6 +1020,14 @@ function RoundDetail({rid, rounds, players, nav, year, hcp2026, allYearRounds, i
                   <td style={S.td}>{e.totalStrokes}</td>
                   <td style={{...S.td,fontWeight:800,color:"#1a472a",fontSize:16}}>{e.netPts}</td>
                   <td style={S.td}>{e.grossPts}</td>
+                  {isAdmin && (() => {
+                    const log = round.scores_log?.[e.player.id];
+                    const playedDate = log?.playedAt || null;
+                    if (!playedDate) return <td style={{...S.td,fontSize:10,color:"#d1d5db"}}>—</td>;
+                    return <td style={{...S.td,fontSize:10,color:"#6b7280",whiteSpace:"nowrap"}}>
+                      {new Date(playedDate).toLocaleDateString("es-CL",{day:"numeric",month:"short"})}
+                    </td>;
+                  })()}
                   {isAdmin && (() => {
                     const log = round.scores_log?.[e.player.id];
                     if (!log) return <td style={{...S.td,fontSize:10,color:"#d1d5db"}}>—</td>;
@@ -1226,15 +1235,19 @@ function RoundHistoryCard({ roundHistory, rounds, pid, p, year, players, hcp2026
             <div style={{display:"flex",alignItems:"center",padding:"10px 4px",cursor:"pointer",gap:8}}
               onClick={()=>setOpenRound(isOpen?null:rh.rid)}>
               <span style={{fontSize:12,color:"#9ca3af",width:14}}>{isOpen?"▼":"▶"}</span>
-              <span style={{flex:1,fontWeight:600,fontSize:13,color:"#1a472a"}}>{rh.name}</span>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontWeight:600,fontSize:13,color:"#1a472a"}}>{rh.name}</div>
+                {(rh.playedAt || rh.loadedAt) && (
+                  <div style={{fontSize:10,color:"#9ca3af",marginTop:1}}>
+                    {rh.playedAt && <>🗓 jugado {new Date(rh.playedAt).toLocaleDateString("es-CL",{day:"numeric",month:"short"})}</>}
+                    {rh.playedAt && rh.loadedAt && <span style={{margin:"0 4px"}}>·</span>}
+                    {rh.loadedAt && <>{rh.loadSource==="pending"?"📱":"⌨️"} cargado {new Date(rh.loadedAt).toLocaleDateString("es-CL",{day:"numeric",month:"short"})}</>}
+                  </div>
+                )}
+              </div>
               {isBest && <span style={{fontSize:10,padding:"1px 6px",borderRadius:8,backgroundColor:"#f0f7f0",color:"#1a472a",fontWeight:700}}>⭐ Best</span>}
               <span style={{fontSize:12,color:"#6b7280"}}>{rh.strokes} golpes</span>
               <span style={{fontWeight:800,fontSize:15,color:"#1a472a",minWidth:28,textAlign:"right"}}>{rh.netPts} pts</span>
-              {rh.loadedAt && (
-                <span style={{fontSize:10,color:"#9ca3af",whiteSpace:"nowrap",marginLeft:4}} title={`Fuente: ${rh.loadSource==="pending"?"jugador":"admin"}`}>
-                  {rh.loadSource==="pending"?"📱":"⌨️"} {new Date(rh.loadedAt).toLocaleDateString("es-CL",{day:"numeric",month:"short"})}
-                </span>
-              )}
             </div>
             {isOpen && holes.length > 0 && (
               <div style={{overflowX:"auto",paddingBottom:10,backgroundColor:"#f8fdf8",borderRadius:6,margin:"0 0 4px"}}>
@@ -1351,7 +1364,7 @@ function PlayerDetail({pid, rankings, rounds, allRounds, nav, year, hcp2026, pla
           else doubles++;
         }
       });
-      roundHistory.push({date:r.date, name:r.name, netPts:rNet, grossPts:rGross, strokes:rStrokes, rid:r.id, loadedAt:r.scores_log?.[pid]?.loadedAt, loadSource:r.scores_log?.[pid]?.source});
+      roundHistory.push({date:r.date, name:r.name, netPts:rNet, grossPts:rGross, strokes:rStrokes, rid:r.id, playedAt:r.scores_log?.[pid]?.playedAt, loadedAt:r.scores_log?.[pid]?.loadedAt, loadSource:r.scores_log?.[pid]?.source});
     });
     return {birdies, pars, bogeys, doubles, eagles, holesPlayed,
       holeAverages: holeAvg.map((s,i) => holeCounts[i] ? s/holeCounts[i] : 0),
@@ -1930,7 +1943,7 @@ function ManualEntry({players, allRounds, yearRounds, saveRounds, saveRoundsAndP
     const existing = yearRounds.find(r => r.name === form.name);
     if (existing) {
       roundId = existing.id;
-      const logEntry = { loadedAt: new Date().toISOString(), source: activeReqId ? "pending" : "admin" };
+      const logEntry = { playedAt: form.date, loadedAt: new Date().toISOString(), source: activeReqId ? "pending" : "admin" };
       updatedRounds = allRounds.map(r => r.id===existing.id ? {
         ...r,
         date: form.date,
@@ -1939,7 +1952,7 @@ function ManualEntry({players, allRounds, yearRounds, saveRounds, saveRoundsAndP
       } : r);
     } else {
       roundId = "r"+Date.now();
-      const logEntry = { loadedAt: new Date().toISOString(), source: activeReqId ? "pending" : "admin" };
+      const logEntry = { playedAt: form.date, loadedAt: new Date().toISOString(), source: activeReqId ? "pending" : "admin" };
       updatedRounds = [...allRounds, {
         id: roundId,
         name: form.name,
