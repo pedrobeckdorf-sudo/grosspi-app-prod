@@ -24,36 +24,50 @@ const HCP_2026_DEFAULT = {
 // HCP from gross points: 36 - grossPts
 // T1: Inicial, T2: avg(Inicial, T1) cap +2, T3: avg(Inicial,T1,T2)
 // T4: best 3 of (Inicial,T1,T2,T3), T5: best 3 of last 4, T6+: best 3 of last 5
-function calcDynamicHcp(playerId, roundIndex, allRounds, players, hcpData) {
+function calcDynamicHcp(playerId, targetRoundId, allRounds, players, hcpData) {
   const h0 = hcpData[playerId]?.inicial ?? 20;
-  // Collect HCPs derived from each played round (36 - grossPts)
+
+  // Find the target round to know its date
+  // targetRoundId can be a round id string OR a legacy numeric index
+  let targetDate;
+  if (typeof targetRoundId === "number") {
+    // Legacy: index into allRounds array — use that round's date
+    const tr = allRounds[targetRoundId];
+    targetDate = tr ? tr.date : null;
+  } else {
+    const tr = allRounds.find(r => r.id === targetRoundId);
+    targetDate = tr ? tr.date : null;
+  }
+
+  // Build player's personal sequence: only rounds they played, sorted chronologically
+  const playerRounds = allRounds
+    .filter(r => r.scores?.[playerId])
+    .sort((a, b) => new Date(a.date) - new Date(b.date));
+
+  // Collect grossPts from rounds played BEFORE the target date
   const playedHcps = [];
-  for (let i = 0; i < roundIndex; i++) {
-    const r = allRounds[i];
-    if (!r?.scores?.[playerId]) continue;
-    const p = players.find(x => x.id === playerId);
-    if (!p) continue;
+  for (const r of playerRounds) {
+    if (targetDate && new Date(r.date) >= new Date(targetDate)) break;
     let grossPts = 0;
     r.scores[playerId].forEach((s, hi) => {
       grossPts += stablefordGross(s, COURSE.pars[hi]);
     });
     playedHcps.push(36 - grossPts);
   }
-  const n = playedHcps.length; // number of rounds played before this one
-  if (n === 0) return h0; // T1
-  if (n === 1) { // T2: avg(Inicial, T1) — result capped at h0+2 per reglamento
-    return Math.min(Math.round((h0 + playedHcps[0]) / 2), h0 + 2);
-  }
-  if (n === 2) return Math.round((h0 + playedHcps[0] + playedHcps[1]) / 3); // T3
-  if (n === 3) { // T4: best 3 of [h0, ...playedHcps]
+
+  const n = playedHcps.length; // rounds this player played before targetDate
+  if (n === 0) return h0; // primera ronda del jugador
+  if (n === 1) return Math.min(Math.round((h0 + playedHcps[0]) / 2), h0 + 2); // 2ª
+  if (n === 2) return Math.round((h0 + playedHcps[0] + playedHcps[1]) / 3); // 3ª
+  if (n === 3) { // 4ª: best 3 of [h0, ...playedHcps]
     const all = [h0, ...playedHcps].sort((a,b) => a-b);
     return Math.round((all[0] + all[1] + all[2]) / 3);
   }
-  if (n === 4) { // T5: best 3 of last 4 played
+  if (n === 4) { // 5ª: best 3 of last 4
     const last4 = playedHcps.slice(-4).sort((a,b) => a-b);
     return Math.round((last4[0] + last4[1] + last4[2]) / 3);
   }
-  // T6+: best 3 of last 5 played
+  // 6ª+: best 3 of last 5
   const last5 = playedHcps.slice(-5).sort((a,b) => a-b);
   return Math.round((last5[0] + last5[1] + last5[2]) / 3);
 }
@@ -310,7 +324,7 @@ function computeRankingsFromRounds(players, yearRounds, yearNum, hcpData) {
       if (!r.scores?.[p.id]) return;
       const holes = r.scores[p.id];
       // HCP used to PLAY this round (before)
-      const hcpForPlay = yearNum >= 2026 ? calcDynamicHcp(p.id, rIdx, yearRounds, players, hcpData) : (p.handicap || 18);
+      const hcpForPlay = yearNum >= 2026 ? calcDynamicHcp(p.id, r.id, yearRounds, players, hcpData) : (p.handicap || 18);
       let netPts = 0, grossPts = 0, strokes = 0;
       holes.forEach((s, i) => {
         if (s > 0) {
@@ -326,7 +340,10 @@ function computeRankingsFromRounds(players, yearRounds, yearNum, hcpData) {
       netVals.push(netPts);
       grossVals.push(grossPts);
       // HCP AFTER this round = calcDynamicHcp with rIdx+1
-      const hcpAfter = yearNum >= 2026 ? calcDynamicHcp(p.id, rIdx + 1, yearRounds, players, hcpData) : hcpForPlay;
+      // HCP AFTER this round: same as hcpForPlay but including this round's result
+      // Pass a synthetic future date so calcDynamicHcp includes this round
+      const _afterRounds = [...yearRounds, {id:"__after__", date: new Date(new Date(r.date).getTime()+1).toISOString().slice(0,10), scores:{}}];
+      const hcpAfter = yearNum >= 2026 ? calcDynamicHcp(p.id, "__after__", _afterRounds, players, hcpData) : hcpForPlay;
       hcpHistory.push({ roundName: label, hcp: hcpAfter, roundDate: r.date });
       tarjetas++;
     });
@@ -466,8 +483,12 @@ export default function App() {
     return [...yrs].sort();
   }, [rounds]);
 
-  // Filter rounds by selected year
-  const yearRounds = useMemo(() => rounds.filter(r => roundYear(r) === year), [rounds, year]);
+  // Filter rounds by selected year — sorted by date so HCP calc respects chronological order
+  const yearRounds = useMemo(() => 
+    rounds
+      .filter(r => roundYear(r) === year)
+      .sort((a, b) => new Date(a.date) - new Date(b.date))
+  , [rounds, year]);
 
   // Rankings depend on the year
   const annual2025 = INIT_DATA.annual2025;
@@ -715,16 +736,12 @@ function Dashboard({rankings, rounds, nav, annual, players, year, hcp2026, isAdm
 
 // ======== ROUNDS ========
 function Rounds({rounds, players, nav, year, hcp2026, isAdmin, saveRounds, allRounds}) {
-  const sorted = [...rounds].sort((a,b) => {
-    const ia = parseInt(a.id.replace("r",""));
-    const ib = parseInt(b.id.replace("r",""));
-    return ia - ib;
-  });
+  const sorted = [...rounds].sort((a,b) => new Date(a.date) - new Date(b.date));
   // Helper to get HCP for a player in a round
   const getHcp = (pid, r) => {
     if (year >= 2026) {
       const rIdx = sorted.indexOf(r);
-      return calcDynamicHcp(pid, rIdx >= 0 ? rIdx : 0, sorted, players, hcp2026);
+      return calcDynamicHcp(pid, r.id, sorted, players, hcp2026);
     }
     const p = players.find(x=>x.id===pid);
     return p?.handicap || 18;
@@ -913,7 +930,7 @@ function RoundDetail({rid, rounds, players, nav, year, hcp2026, allYearRounds, i
       let hcp = p.handicap || 18;
       if (year >= 2026 && allYearRounds) {
         const rIdx = allYearRounds.findIndex(r => r.id === rid);
-        hcp = calcDynamicHcp(pid, rIdx >= 0 ? rIdx : 0, allYearRounds, players, hcp2026);
+        hcp = calcDynamicHcp(pid, rid, allYearRounds, players, hcp2026);
       }
       let netPts=0, grossPts=0, totalStrokes=0;
       const details = holes.map((s,i) => {
@@ -1224,7 +1241,7 @@ function RoundHistoryCard({ roundHistory, rounds, pid, p, year, players, hcp2026
       {roundHistory.map((rh, ri) => {
         const r = rounds.find(x=>x.id===rh.rid);
         const holes = r?.scores?.[pid] || [];
-        const hcp = year >= 2026 ? calcDynamicHcp(pid, ri, rounds, players, hcp2026) : (p.handicap||18);
+        const hcp = year >= 2026 ? calcDynamicHcp(pid, rounds[ri]?.id ?? rounds[0]?.id, rounds, players, hcp2026) : (p.handicap||18);
         const details = holes.map((s,i)=>({
           strokes:s, par:COURSE.pars[i],
           netPts: stablefordNet(s,COURSE.pars[i],hcp,COURSE.handicapIndex[i])
@@ -1334,7 +1351,7 @@ function PlayerDetail({pid, rankings, rounds, allRounds, nav, year, hcp2026, pla
     // 2026+: use rIdx+1 to get HCP AFTER each round
     rounds2026plus.forEach((r, rIdx) => {
       if (!r.scores?.[pid]) return;
-      const hcp = calcDynamicHcp(pid, rIdx + 1, rounds2026plus, players, hcp2026);
+      const hcp = calcDynamicHcp(pid, r.id + "_after", [...rounds2026plus, {id:r.id+"_after", date:new Date(new Date(r.date).getTime()+1).toISOString().slice(0,10), scores:{}}], players, hcp2026);
       history.push({ roundName: r.name, hcp, date: r.date, year: roundYear(r) });
     });
     return history;
@@ -1349,7 +1366,7 @@ function PlayerDetail({pid, rankings, rounds, allRounds, nav, year, hcp2026, pla
     rounds.forEach((r, rIdx) => {
       if (!r.scores?.[pid]) return;
       const holes = r.scores[pid];
-      const hcp = year >= 2026 ? calcDynamicHcp(pid, rIdx, rounds, players, hcp2026) : (p.handicap || 18);
+      const hcp = year >= 2026 ? calcDynamicHcp(pid, r.id, rounds, players, hcp2026) : (p.handicap || 18);
       let rNet=0, rGross=0, rStrokes=0;
       holes.forEach((s,i) => {
         if (s > 0) {
@@ -1524,7 +1541,7 @@ function Compare({rankings, cmpIds, setCmpIds, rounds, allRounds, players, hcp20
         let net = 0;
         const rIdx = sortedRounds.indexOf(r);
         const hcp = roundYear(r) >= 2026
-          ? calcDynamicHcp(pid, rIdx, sortedRounds.filter(x=>roundYear(x)>=2026), players, hcp2026)
+          ? calcDynamicHcp(pid, r.id, sortedRounds.filter(x=>roundYear(x)>=2026), players, hcp2026)
           : (p.handicap||18);
         r.scores[pid].forEach((s,i) => { net += stablefordNet(s, COURSE.pars[i], hcp, COURSE.handicapIndex[i]); });
         cumPts += net;
@@ -1546,7 +1563,7 @@ function Compare({rankings, cmpIds, setCmpIds, rounds, allRounds, players, hcp20
     });
     r2026.forEach((r,rIdx) => {
       if (!r.scores?.[pid]) return;
-      hcpHistory.push({roundName:r.name, hcp:calcDynamicHcp(pid,rIdx,r2026,players,hcp2026)});
+      hcpHistory.push({roundName:r.name, hcp:calcDynamicHcp(pid,r.id,r2026,players,hcp2026)});
     });
 
     return {...p, color:colors[ci], holeAverages:holeAvg.map((s,i)=>holeCounts[i]?s/holeCounts[i]:0), ptsPerRound, hcpHistory};
@@ -2346,7 +2363,7 @@ function Stats({ allRounds, players, rankings, year, hcp2026, availableYears }) 
       const played2026 = rounds2026.filter(r => r.scores?.[pid]);
       if (played2026.length > 0) {
         const lastIdx = rounds2026.findIndex(r => r.id === played2026[played2026.length-1].id);
-        return calcDynamicHcp(pid, lastIdx + 1, rounds2026, players, hcp2026);
+        const _lastR = rounds2026[lastIdx]; return calcDynamicHcp(pid, _lastR.id+"_after", [...rounds2026,{id:_lastR.id+"_after",date:new Date(new Date(_lastR.date).getTime()+1).toISOString().slice(0,10),scores:{}}], players, hcp2026);
       }
       // No 2026 rounds — use HCP inicial 2026 if set
       if (hcp2026[pid]?.inicial != null) return hcp2026[pid].inicial;
@@ -2368,7 +2385,7 @@ function Stats({ allRounds, players, rankings, year, hcp2026, availableYears }) 
         let net2026 = [], tarj2026 = 0;
         rounds2026.forEach((r, rIdx) => {
           if (!r.scores?.[p.id]) return;
-          const hcp = calcDynamicHcp(p.id, rIdx, rounds2026, players, hcp2026);
+          const hcp = calcDynamicHcp(p.id, r.id, rounds2026, players, hcp2026);
           let net = 0;
           r.scores[p.id].forEach((s, i) => { net += stablefordNet(s, COURSE.pars[i], hcp, COURSE.handicapIndex[i]); });
           net2026.push(net);
@@ -2458,7 +2475,7 @@ function Stats({ allRounds, players, rankings, year, hcp2026, availableYears }) 
           if (hcp === null) return;
         } else {
           // 2026: rIdx+1 = HCP after this round
-          hcp = calcDynamicHcp(p.id, rIdx + 1, sortedRounds, players, hcp2026);
+          hcp = calcDynamicHcp(p.id, r.id+"_after", [...sortedRounds,{id:r.id+"_after",date:new Date(new Date(r.date).getTime()+1).toISOString().slice(0,10),scores:{}}], players, hcp2026);
         }
         data[p.id].push({ roundName: r.name, hcp, date: r.date });
       });
@@ -2473,7 +2490,7 @@ function Stats({ allRounds, players, rankings, year, hcp2026, availableYears }) 
         .filter(p => r.scores?.[p.id])
         .map(p => {
           if (isRound2025(r)) return get2025Hcp(p.id, r.name);
-          return calcDynamicHcp(p.id, rIdx + 1, sortedRounds, players, hcp2026);
+          return calcDynamicHcp(p.id, r.id+"_after", [...sortedRounds,{id:r.id+"_after",date:new Date(new Date(r.date).getTime()+1).toISOString().slice(0,10),scores:{}}], players, hcp2026);
         })
         .filter(h => h !== null);
       return {
