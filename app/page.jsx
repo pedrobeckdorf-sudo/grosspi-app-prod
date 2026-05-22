@@ -886,11 +886,20 @@ function RoundDetail({rid, rounds, players, nav, year, hcp2026, allYearRounds, i
   const [editing, setEditing] = useState(false);
   const [editName, setEditName] = useState(round.name || "");
   const [editDate, setEditDate] = useState(round.date || "");
+  const [editingPlayedAt, setEditingPlayedAt] = useState(null); // pid being edited
 
   const handleSaveEdit = () => {
     const updated = allRounds.map(r => r.id === rid ? {...r, name: editName, date: editDate} : r);
     saveRounds(updated);
     setEditing(false);
+  };
+
+  const handleSavePlayedAt = (pid, newDate) => {
+    const currentLog = round.scores_log?.[pid] || {};
+    const updatedLog = {...(round.scores_log||{}), [pid]: {...currentLog, playedAt: newDate}};
+    const updated = allRounds.map(r => r.id === rid ? {...r, scores_log: updatedLog} : r);
+    saveRounds(updated);
+    setEditingPlayedAt(null);
   };
 
   const handleDeleteRound = () => {
@@ -1040,11 +1049,37 @@ function RoundDetail({rid, rounds, players, nav, year, hcp2026, allYearRounds, i
                   {(() => {
                     const log = round.scores_log?.[e.player.id];
                     const playedDate = log?.playedAt || round.date || null;
-                    if (!playedDate) return <td style={{...S.td,fontSize:10,color:"#d1d5db"}}>—</td>;
                     const isExact = !!log?.playedAt;
-                    return <td style={{...S.td,fontSize:10,color:isExact?"#6b7280":"#9ca3af",whiteSpace:"nowrap"}}>
-                      {!isExact && <span title="Fecha de la ronda, no individual">~</span>}{new Date(playedDate).toLocaleDateString("es-CL",{day:"numeric",month:"short"})}
-                    </td>;
+                    if (isAdmin && editingPlayedAt === e.player.id) {
+                      return (
+                        <td style={{...S.td}} onClick={ev => ev.stopPropagation()}>
+                          <input
+                            type="date"
+                            defaultValue={playedDate || ""}
+                            autoFocus
+                            style={{fontSize:11,border:"1px solid #6b7280",borderRadius:4,padding:"2px 4px",width:120}}
+                            onBlur={ev => handleSavePlayedAt(e.player.id, ev.target.value)}
+                            onKeyDown={ev => {
+                              if (ev.key === "Enter") handleSavePlayedAt(e.player.id, ev.target.value);
+                              if (ev.key === "Escape") setEditingPlayedAt(null);
+                            }}
+                          />
+                        </td>
+                      );
+                    }
+                    return (
+                      <td
+                        style={{...S.td, fontSize:10, color: isExact ? "#6b7280" : "#9ca3af", whiteSpace:"nowrap", cursor: isAdmin ? "pointer" : "default"}}
+                        onClick={isAdmin ? ev => { ev.stopPropagation(); setEditingPlayedAt(e.player.id); } : undefined}
+                        title={isAdmin ? "Click para editar fecha de juego" : undefined}
+                      >
+                        {!playedDate ? (isAdmin ? <span style={{color:"#d1d5db"}}>— ✏️</span> : "—") : <>
+                          {!isExact && <span title="Fecha de la ronda, no individual">~</span>}
+                          {new Date(playedDate).toLocaleDateString("es-CL",{day:"numeric",month:"short"})}
+                          {isAdmin && <span style={{marginLeft:3,opacity:0.4,fontSize:9}}>✏️</span>}
+                        </>}
+                      </td>
+                    );
                   })()}
                   {isAdmin && (() => {
                     const log = round.scores_log?.[e.player.id];
