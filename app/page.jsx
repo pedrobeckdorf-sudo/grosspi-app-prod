@@ -2144,7 +2144,8 @@ function PlayerPhotoUpload({ players, addPendingRequest, yearRounds }) {
         <div style={{...S.card,borderLeft:"4px solid #f59e0b",backgroundColor:"#fffbeb"}}>
           <div style={{fontSize:13,color:"#92400e"}}>
             ⚠️ <b>{yaCargados.map(nameOf).join(", ")}</b> ya {yaCargados.length===1?"tiene":"tienen"} una tarjeta cargada en <b>{form.name}</b>.
-            Si esta es una fecha adicional, selecciona <b>Adicional 1</b> o <b>Adicional 2</b> como ronda para no pisar el score anterior.
+            Envíala igual: el admin la cargará como <b>Adicional</b> para quien corresponda, sin mover al resto de la tarjeta.
+            Si <b>toda</b> la tarjeta es una fecha adicional, elige directamente Adicional 1 o 2 arriba.
           </div>
         </div>
       )}
@@ -2202,6 +2203,7 @@ function ManualEntry({players, allRounds, yearRounds, saveRounds, nav, pending, 
   const [grid, setGrid] = useState({});                  // { [playerId]: string[18] }
   const [photo, setPhoto] = useState(null);
   const [overwriteOk, setOverwriteOk] = useState({});    // { [playerId]: true } sobrescritura confirmada
+  const [playerRound, setPlayerRound] = useState({});   // { [playerId]: nombreRonda } — excepciones; el resto hereda meta.name
   const [saved, setSaved] = useState(null);              // texto de confirmación
   const [saving, setSaving] = useState(false);
   const [previewReq, setPreviewReq] = useState(null);
@@ -2215,6 +2217,7 @@ function ManualEntry({players, allRounds, yearRounds, saveRounds, nav, pending, 
       if (prev.includes(pid)) {
         setGrid(g => { const {[pid]:_, ...rest} = g; return rest; });
         setOverwriteOk(o => { const {[pid]:_, ...rest} = o; return rest; });
+        setPlayerRound(pr => { const {[pid]:_, ...rest} = pr; return rest; });
         return prev.filter(x => x !== pid);
       }
       setGrid(g => ({...g, [pid]: emptyScores()}));
@@ -2237,6 +2240,7 @@ function ManualEntry({players, allRounds, yearRounds, saveRounds, nav, pending, 
     setSelected(pids);
     setGrid(Object.fromEntries(pids.map(pid => [pid, emptyScores()])));
     setOverwriteOk({});
+    setPlayerRound({});
     setPhoto(req.photo);
     setActiveReqId(req.id);
     setPreviewReq(null);
@@ -2260,28 +2264,46 @@ function ManualEntry({players, allRounds, yearRounds, saveRounds, nav, pending, 
   const currentRound = useMemo(() => yearRounds.find(r => r.name === meta.name), [yearRounds, meta.name]);
   const playersInRound = useMemo(() => currentRound?.scores ? Object.keys(currentRound.scores) : [], [currentRound]);
 
+  // ===== RONDA POR JUGADOR =====
+  // Una misma tarjeta puede alimentar rondas distintas: para dos jugadores es la
+  // T8 y para el tercero, que ya jugó la T8, es su Adicional. Cada jugador hereda
+  // la ronda de la tarjeta salvo que se le asigne una excepción.
+  const roundOf = useCallback((pid) => playerRound[pid] || meta.name, [playerRound, meta.name]);
+
+  const playersOfRound = useCallback((rn) => {
+    const r = yearRounds.find(x => x.name === rn);
+    return r?.scores ? Object.keys(r.scores) : [];
+  }, [yearRounds]);
+
   // ===== DETECCIÓN DE DUPLICADOS =====
-  // (a) el jugador ya tiene tarjeta en ESTA ronda → sobrescribiría sus datos
-  const dupInRound = useMemo(() => selected.filter(pid => playersInRound.includes(pid)), [selected, playersInRound]);
+  // (a) el jugador ya tiene tarjeta en LA RONDA QUE LE TOCA → sobrescribiría sus datos
+  const dupInRound = useMemo(
+    () => selected.filter(pid => playersOfRound(roundOf(pid)).includes(pid)),
+    [selected, roundOf, playersOfRound]
+  );
 
   // (b) el jugador ya tiene una tarjeta cargada con esta MISMA fecha en otra ronda
   const dupSameDate = useMemo(() => {
     if (!meta.date) return [];
     return selected.filter(pid => allRounds.some(r =>
-      r.name !== meta.name &&
+      r.name !== roundOf(pid) &&
       r.scores?.[pid] &&
       ((r.scores_log?.[pid]?.playedAt || r.date) === meta.date)
     ));
-  }, [selected, allRounds, meta.date, meta.name]);
+  }, [selected, allRounds, meta.date, roundOf]);
 
-  // Slots "Adicional" libres para TODOS los duplicados
-  const freeAdicional = useMemo(() => {
-    return ROUND_NAMES.filter(rn => rn.startsWith("Adicional")).filter(rn => {
-      const r = yearRounds.find(x => x.name === rn);
-      const taken = r?.scores ? Object.keys(r.scores) : [];
-      return !dupInRound.some(pid => taken.includes(pid));
-    });
-  }, [yearRounds, dupInRound]);
+  // Slots "Adicional" libres para UN jugador puntual
+  const freeAdicionalFor = useCallback(
+    (pid) => ROUND_NAMES.filter(rn => rn.startsWith("Adicional") && !playersOfRound(rn).includes(pid)),
+    [playersOfRound]
+  );
+
+  // Cuántas rondas distintas va a escribir esta tarjeta
+  const roundsToWrite = useMemo(() => {
+    const m = {};
+    selected.forEach(pid => { const rn = roundOf(pid); (m[rn] = m[rn] || []).push(pid); });
+    return m;
+  }, [selected, roundOf]);
 
   const blockingDupes = dupInRound.filter(pid => !overwriteOk[pid]);
   const nameOf = (pid) => players.find(p => p.id === pid)?.name || pid;
@@ -2302,47 +2324,67 @@ function ManualEntry({players, allRounds, yearRounds, saveRounds, nav, pending, 
     setSaving(true);
     try {
       const loadedAt = new Date().toISOString();
-      const logEntry = { playedAt: meta.date, loadedAt, source: activeReqId ? "pending" : "admin" };
+      const source = activeReqId ? "pending" : "admin";
+      const yr = new Date(meta.date + "T12:00:00").getFullYear();
 
-      const newScores = {};
-      const newLogs = {};
+      // Agrupar por la ronda que le toca a cada jugador: una misma tarjeta puede
+      // escribir en más de una ronda (p.ej. dos en T8 y uno en Adicional 1)
+      const grupos = {};
       filledPlayers.forEach(pid => {
-        newScores[pid] = (grid[pid] || emptyScores()).map(v => parseInt(v) || 0);
-        newLogs[pid] = logEntry;
+        const rn = roundOf(pid);
+        (grupos[rn] = grupos[rn] || []).push(pid);
       });
 
-      let roundId;
-      let updatedRounds;
-      const existing = yearRounds.find(r => r.name === meta.name);
-      if (existing) {
-        roundId = existing.id;
-        updatedRounds = allRounds.map(r => r.id === existing.id ? {
-          ...r,
-          date: meta.date,
-          scores: {...r.scores, ...newScores},
-          scores_log: {...(r.scores_log || {}), ...newLogs},
-        } : r);
-      } else {
-        roundId = "r" + Date.now();
-        updatedRounds = [...allRounds, {
-          id: roundId, name: meta.name, date: meta.date,
-          scores: newScores, scores_log: newLogs,
-        }];
-      }
+      let updatedRounds = [...allRounds];
+      const destinos = []; // [{roundId, pids}] para asociar la foto después
+      const stamp = Date.now();
+      let nuevaIdx = 0;
+
+      Object.entries(grupos).forEach(([rn, pids]) => {
+        const newScores = {}, newLogs = {};
+        pids.forEach(pid => {
+          newScores[pid] = (grid[pid] || emptyScores()).map(v => parseInt(v) || 0);
+          newLogs[pid] = { playedAt: meta.date, loadedAt, source };
+        });
+
+        const existente = updatedRounds.find(r => r.name === rn && roundYear(r) === yr);
+        if (existente) {
+          // No se pisa la fecha de la ronda: la fecha individual va en scores_log[pid].playedAt
+          updatedRounds = updatedRounds.map(r => r.id === existente.id ? {
+            ...r,
+            scores: {...r.scores, ...newScores},
+            scores_log: {...(r.scores_log || {}), ...newLogs},
+          } : r);
+          destinos.push({ roundId: existente.id, pids });
+        } else {
+          // Sin truncar el nombre y con contador: dos rondas nuevas en un mismo
+          // guardado (Adicional 1 y Adicional 2) no pueden compartir id
+          const roundId = "r" + stamp + "-" + (++nuevaIdx) + "-" + rn.replace(/[^A-Za-z0-9]/g, "");
+          updatedRounds = [...updatedRounds, {
+            id: roundId, name: rn, date: meta.date,
+            scores: newScores, scores_log: newLogs,
+          }];
+          destinos.push({ roundId, pids });
+        }
+      });
 
       await saveRounds(updatedRounds);
 
-      // Una sola foto para toda la tarjeta — no se duplica la imagen por jugador
+      // La foto de la tarjeta se asocia a cada ronda destino, con los jugadores que van en ella
       if (photo) {
         const photoForDB = await compressPhotoForDB(photo);
-        await fbSaveCardPhoto(roundId, filledPlayers, photoForDB);
+        for (const d of destinos) await fbSaveCardPhoto(d.roundId, d.pids, photoForDB);
       }
 
       if (activeReqId) { await removePendingRequest(activeReqId); setActiveReqId(null); }
 
-      setSaved(`${filledPlayers.length} jugador${filledPlayers.length > 1 ? "es" : ""} guardado${filledPlayers.length > 1 ? "s" : ""} en ${meta.name}`);
-      setTimeout(() => setSaved(null), 3500);
-      setSelected([]); setGrid({}); setOverwriteOk({}); setPhoto(null);
+      const nRondas = Object.keys(grupos).length;
+      const detalle = nRondas > 1
+        ? Object.entries(grupos).map(([rn, pids]) => `${pids.length} en ${rn}`).join(" y ")
+        : `en ${Object.keys(grupos)[0]}`;
+      setSaved(`${filledPlayers.length} jugador${filledPlayers.length > 1 ? "es" : ""} guardado${filledPlayers.length > 1 ? "s" : ""} ${detalle}`);
+      setTimeout(() => setSaved(null), 4000);
+      setSelected([]); setGrid({}); setOverwriteOk({}); setPlayerRound({}); setPhoto(null);
     } finally {
       setSaving(false);
     }
@@ -2467,44 +2509,62 @@ function ManualEntry({players, allRounds, yearRounds, saveRounds, nav, pending, 
         )}
       </div>
 
-      {/* WARNING DE DUPLICADOS */}
+      {/* WARNING DE DUPLICADOS — se resuelve jugador por jugador */}
       {dupInRound.length > 0 && (
         <div style={{...S.card,borderLeft:"4px solid #dc2626",backgroundColor:"#fef2f2"}}>
-          <h2 style={{...S.cardTitle,color:"#991b1b"}}>⚠️ Jugador duplicado en {meta.name}</h2>
+          <h2 style={{...S.cardTitle,color:"#991b1b"}}>
+            ⚠️ {dupInRound.length === 1 ? "Jugador duplicado" : `${dupInRound.length} jugadores duplicados`}
+          </h2>
           <p style={{fontSize:13,color:"#7f1d1d",marginTop:0}}>
-            {dupInRound.length === 1
-              ? <><b>{nameOf(dupInRound[0])}</b> ya tiene una tarjeta cargada en esta ronda.</>
-              : <><b>{dupInRound.map(nameOf).join(", ")}</b> ya tienen tarjeta cargada en esta ronda.</>}
-            {" "}Si es una fecha adicional, cárgala como <b>Adicional</b> para no perder el score anterior.
+            Ya {dupInRound.length === 1 ? "tiene" : "tienen"} tarjeta cargada en la ronda que les toca.
+            Resuelve cada uno por separado: si para ese jugador esta fecha es adicional, muévelo a un
+            <b> Adicional</b> — el resto de la tarjeta se queda donde está.
           </p>
 
-          {freeAdicional.length > 0 && (
-            <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:12}}>
-              {freeAdicional.map(rn => (
-                <button key={rn} onClick={()=>{setMeta({...meta,name:rn}); setOverwriteOk({});}}
-                  style={{...S.btn,...S.btnP,fontSize:13,padding:"9px 16px"}}>
-                  ↪ Cargar como {rn}
-                </button>
-              ))}
-            </div>
-          )}
-          {freeAdicional.length === 0 && (
-            <div style={{fontSize:12,color:"#7f1d1d",marginBottom:12,fontWeight:600}}>
-              No quedan slots "Adicional" libres para {dupInRound.length === 1 ? "este jugador" : "estos jugadores"} — el reglamento permite máximo 2 adicionales al año.
-            </div>
-          )}
+          {dupInRound.map(pid => {
+            const libres = freeAdicionalFor(pid);
+            return (
+              <div key={pid} style={{borderTop:"1px solid #fecaca",paddingTop:10,marginTop:10}}>
+                <div style={{fontWeight:700,color:"#991b1b",fontSize:14,marginBottom:6}}>
+                  {nameOf(pid)} <span style={{fontWeight:500,color:"#7f1d1d",fontSize:12}}>· ya cargado en {roundOf(pid)}</span>
+                </div>
+                <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
+                  {libres.map(rn => (
+                    <button key={rn}
+                      onClick={()=>{ setPlayerRound(pr => ({...pr, [pid]: rn})); setOverwriteOk(o => ({...o, [pid]: false})); }}
+                      style={{...S.btn,...S.btnP,fontSize:12,padding:"8px 14px"}}>
+                      ↪ Mover a {rn}
+                    </button>
+                  ))}
+                  {libres.length === 0 && (
+                    <span style={{fontSize:12,color:"#7f1d1d",fontWeight:600}}>
+                      Sin Adicionales libres (máx. 2 al año)
+                    </span>
+                  )}
+                  <label style={{display:"flex",alignItems:"center",gap:6,fontSize:12,color:"#7f1d1d",cursor:"pointer"}}>
+                    <input type="checkbox" checked={!!overwriteOk[pid]} style={{width:18,height:18,cursor:"pointer"}}
+                      onChange={e=>setOverwriteOk(o => ({...o, [pid]: e.target.checked}))} />
+                    Sobrescribir (se pierde el score anterior)
+                  </label>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
 
-          <div style={{borderTop:"1px solid #fecaca",paddingTop:10}}>
-            <div style={{fontSize:11,fontWeight:700,color:"#991b1b",textTransform:"uppercase",letterSpacing:"0.04em",marginBottom:8}}>
-              O sobrescribir el score existente (se pierde el anterior)
-            </div>
-            {dupInRound.map(pid => (
-              <label key={pid} style={{display:"flex",alignItems:"center",gap:8,fontSize:13,color:"#7f1d1d",marginBottom:6,cursor:"pointer"}}>
-                <input type="checkbox" checked={!!overwriteOk[pid]} style={{width:18,height:18,cursor:"pointer"}}
-                  onChange={e=>setOverwriteOk(o => ({...o, [pid]: e.target.checked}))} />
-                Sobrescribir la tarjeta de <b>{nameOf(pid)}</b>
-              </label>
-            ))}
+      {/* Resumen cuando la tarjeta se divide en varias rondas */}
+      {Object.keys(roundsToWrite).length > 1 && (
+        <div style={{...S.card,borderLeft:"4px solid #4a6741",backgroundColor:"#f0f7f0"}}>
+          <div style={{fontSize:13,color:"#1a472a"}}>
+            <b>Esta tarjeta se guardará en {Object.keys(roundsToWrite).length} rondas:</b>
+            <ul style={{margin:"6px 0 0",paddingLeft:20}}>
+              {Object.entries(roundsToWrite).map(([rn, pids]) => (
+                <li key={rn} style={{marginBottom:2}}>
+                  <b>{rn}</b>: {pids.map(nameOf).join(", ")}
+                </li>
+              ))}
+            </ul>
           </div>
         </div>
       )}
@@ -2523,22 +2583,43 @@ function ManualEntry({players, allRounds, yearRounds, saveRounds, nav, pending, 
         <div style={S.card}>
           <h2 style={S.cardTitle}>Scores — 18 Hoyos</h2>
           <div style={{overflowX:"auto",WebkitOverflowScrolling:"touch"}}>
-            <table style={{borderCollapse:"separate",borderSpacing:0,width:"100%",minWidth: 120 + selected.length*86}}>
+            <table style={{borderCollapse:"separate",borderSpacing:0,width:"100%",minWidth: 120 + selected.length*112}}>
               <thead>
                 <tr>
                   <th style={{position:"sticky",left:0,zIndex:2,backgroundColor:"#f9fafb",padding:"8px 6px",fontSize:11,fontWeight:700,color:"#6b7280",textAlign:"left",borderBottom:"2px solid #e5e7eb",minWidth:64}}>Hoyo</th>
                   <th style={{padding:"8px 4px",fontSize:11,fontWeight:700,color:"#6b7280",borderBottom:"2px solid #e5e7eb",minWidth:34}}>Par</th>
-                  {selected.map(pid => (
-                    <th key={pid} style={{padding:"8px 4px",fontSize:11,fontWeight:700,color:"#1a472a",borderBottom:"2px solid #e5e7eb",minWidth:82,maxWidth:96}}>
+                  {selected.map(pid => {
+                    const excepcion = !!playerRound[pid] && playerRound[pid] !== meta.name;
+                    const duplicado = dupInRound.includes(pid);
+                    return (
+                    <th key={pid} style={{padding:"8px 4px",fontSize:11,fontWeight:700,color:"#1a472a",borderBottom:"2px solid #e5e7eb",minWidth:104,maxWidth:120,
+                      backgroundColor: duplicado ? "#fef2f2" : excepcion ? "#fffbeb" : "transparent"}}>
                       <div style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={nameOf(pid)}>
                         {nameOf(pid).split(" ")[0]}
                       </div>
                       <div style={{fontSize:10,color:"#9ca3af",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
                         {nameOf(pid).split(" ").slice(1).join(" ")}
                       </div>
+                      {/* Ronda de ESTE jugador — hereda la de la tarjeta salvo excepción */}
+                      <select
+                        value={roundOf(pid)}
+                        title="Ronda a la que va el score de este jugador"
+                        onChange={e => setPlayerRound(pr => {
+                          if (e.target.value === meta.name) { const {[pid]:_, ...rest} = pr; return rest; }
+                          return {...pr, [pid]: e.target.value};
+                        })}
+                        style={{width:"100%",marginTop:3,fontSize:10,padding:"3px 2px",borderRadius:5,cursor:"pointer",
+                          border: duplicado ? "1px solid #dc2626" : excepcion ? "1px solid #f59e0b" : "1px solid #d1d5db",
+                          backgroundColor: duplicado ? "#fee2e2" : excepcion ? "#fef3c7" : "#fff",
+                          color: duplicado ? "#991b1b" : excepcion ? "#92400e" : "#6b7280",
+                          fontWeight: (duplicado || excepcion) ? 700 : 500}}
+                      >
+                        {ROUND_NAMES.map(rn => <option key={rn} value={rn}>{rn}</option>)}
+                      </select>
                       <button onClick={()=>togglePlayer(pid)} style={{marginTop:2,border:"none",background:"none",color:"#dc2626",fontSize:11,cursor:"pointer",padding:0}}>✕ quitar</button>
                     </th>
-                  ))}
+                    );
+                  })}
                 </tr>
               </thead>
               <tbody>
@@ -2618,12 +2699,15 @@ function ManualEntry({players, allRounds, yearRounds, saveRounds, nav, pending, 
       {/* Guardar */}
       {blockingDupes.length > 0 && (
         <div style={{backgroundColor:"#fef2f2",border:"1px solid #fca5a5",borderRadius:10,padding:"12px 16px",marginBottom:12,textAlign:"center",fontSize:13,color:"#991b1b",fontWeight:600}}>
-          🔒 Guardado bloqueado: resuelve el duplicado de {blockingDupes.map(nameOf).join(", ")}
+          🔒 Guardado bloqueado: resuelve el duplicado de {blockingDupes.map(nameOf).join(", ")} — muévelo a un Adicional o marca sobrescribir
         </div>
       )}
       <button style={{...S.btn,...S.btnP,width:"100%",padding:"14px 24px",fontSize:15,opacity: canSave ? 1 : 0.4}}
         onClick={save} disabled={!canSave}>
-        {saving ? "Guardando..." : filledPlayers.length > 1 ? `Guardar ${filledPlayers.length} jugadores` : "Guardar Score"}
+        {saving ? "Guardando..."
+          : Object.keys(roundsToWrite).length > 1 ? `Guardar ${filledPlayers.length} jugadores en ${Object.keys(roundsToWrite).length} rondas`
+          : filledPlayers.length > 1 ? `Guardar ${filledPlayers.length} jugadores`
+          : "Guardar Score"}
       </button>
     </div>
   );
