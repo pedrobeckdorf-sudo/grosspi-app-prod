@@ -263,7 +263,7 @@ function lsSet(key, val) {
 }
 
 // DB paths
-const DB = { players: "grosspi/players", rounds: "grosspi/rounds", hcp2026: "grosspi/hcp2026", pending: "grosspi/pending", roundPhotos: "grosspi/roundPhotos", photoIndex: "grosspi/photoIndex" };
+const DB = { players: "grosspi/players", rounds: "grosspi/rounds", hcp2026: "grosspi/hcp2026", pending: "grosspi/pending", roundPhotos: "grosspi/roundPhotos", photoIndex: "grosspi/photoIndex", adminPin: "grosspi/adminPin" };
 
 const EMPTY_OBJ = {};
 const EMPTY_ARR = [];
@@ -346,16 +346,16 @@ async function fbRebuildPhotoIndex() {
 }
 const LS = { role: "grosspi:role" };
 
-const ADMIN_PIN = "Sbv1240";
+const ADMIN_PIN_DEFAULT = "Sbv1240";
 
 // ======== LOGIN SCREEN ========
-function LoginScreen({ onLogin }) {
+function LoginScreen({ onLogin, adminPin }) {
   const [mode, setMode] = useState(null); // null | "admin"
   const [pin, setPin] = useState("");
   const [error, setError] = useState("");
 
   const handleAdmin = () => {
-    if (pin === ADMIN_PIN) {
+    if (pin === (adminPin || ADMIN_PIN_DEFAULT)) {
       onLogin("admin");
     } else {
       setError("PIN incorrecto");
@@ -498,6 +498,7 @@ export default function App() {
   const [pending, setPending] = useState([]);
   const [photoIndex, setPhotoIndex] = useState({}); // { [roundId]: { [playerId]: bytes } } — sólo metadatos
   const [histLoaded, setHistLoaded] = useState(false);
+  const [adminPin, setAdminPin] = useState(ADMIN_PIN_DEFAULT);
   const [view, setView] = useState("dashboard");
   const [selPlayer, setSelPlayer] = useState(null);
   const [selRound, setSelRound] = useState(null);
@@ -525,7 +526,7 @@ export default function App() {
     if (savedRole) setRole(savedRole);
 
     // Subscribe to Firebase realtime updates
-    let unsubPlayers, unsubRounds, unsubHcp, unsubIndex;
+    let unsubPlayers, unsubRounds, unsubHcp, unsubIndex, unsubPin;
     let firstPlayers = true, firstRounds = true, firstHcp = true;
 
     (async () => {
@@ -576,6 +577,10 @@ export default function App() {
       });
       // Sólo el índice de fotos (ids + peso). Las imágenes se piden por ronda al abrirla.
       unsubIndex = await fbSubscribe(DB.photoIndex, (val) => setPhotoIndex(val || {}));
+      unsubPin = await fbSubscribe(DB.adminPin, (val) => {
+        // Si Firebase tiene un PIN guardado, usarlo; si no, seguir con el default
+        if (val && typeof val === "string") setAdminPin(val);
+      });
     })();
 
     // Red de seguridad: si Firebase no responde, mostrar la UI igual
@@ -593,6 +598,7 @@ export default function App() {
       if (unsubRounds) unsubRounds();
       if (unsubHcp) unsubHcp();
       if (unsubIndex) unsubIndex();
+      if (unsubPin) unsubPin();
     };
   }, []);
 
@@ -620,6 +626,7 @@ export default function App() {
     await fbSet(DB.rounds, forDB);
   }, []);
   const saveHcp2026 = useCallback(async (h) => { setHcp2026(h); await fbSet(DB.hcp2026, h); }, []);
+  const saveAdminPin = useCallback(async (newPin) => { setAdminPin(newPin); await fbSet(DB.adminPin, newPin); }, []);
   // Escrituras por hijo: no requieren tener toda la lista en memoria y no pisan
   // solicitudes de otros usuarios (antes se reescribía el nodo completo).
   const addPendingRequest = useCallback(async (entry) => {
@@ -700,7 +707,7 @@ export default function App() {
     </div>
   );
 
-  if (!role) return <LoginScreen onLogin={handleLogin} />;
+  if (!role) return <LoginScreen onLogin={handleLogin} adminPin={adminPin} />;
 
   const navItems = [
     {id:"dashboard",icon:"🏆",label:"Dashboard"},
@@ -792,7 +799,7 @@ export default function App() {
         {view==="manual" && isAdmin && <ManualEntry players={players} allRounds={rounds} yearRounds={yearRounds} saveRounds={saveRounds} nav={nav} pending={pending} removePendingRequest={removePendingRequest} photoIndex={photoIndex} />}
         {view==="manual" && !isAdmin && <PlayerPhotoUpload players={players} addPendingRequest={addPendingRequest} />}
         {view==="reglamento" && <Reglamento hcp2026={hcp2026} saveHcp2026={saveHcp2026} isAdmin={isAdmin} />}
-        {view==="settings" && isAdmin && <Settings players={players} savePlayers={savePlayers} rounds={rounds} saveRounds={saveRounds} hcp2026={hcp2026} saveHcp2026={saveHcp2026} photoIndex={photoIndex} />}
+        {view==="settings" && isAdmin && <Settings players={players} savePlayers={savePlayers} rounds={rounds} saveRounds={saveRounds} hcp2026={hcp2026} saveHcp2026={saveHcp2026} photoIndex={photoIndex} adminPin={adminPin} saveAdminPin={saveAdminPin} />}
         {view==="settings" && !isAdmin && <div style={S.empty}>🔒 Acceso restringido a administradores</div>}
       </main>
     </div>
@@ -852,7 +859,7 @@ function Dashboard({rankings, rounds, nav, annual, players, year, hcp2026, isAdm
             <th style={{...S.th,borderLeft:"2px solid #d1d5db"}}>PTS</th><th style={S.th}>Prom</th>
           </tr></thead>
           <tbody>
-            {rankings.slice(0,21).map((p,i) => {
+            {rankings.map((p,i) => {
               const colMonths = months || dynamicMonths;
               const displayHcp = p.currentHcp ?? (year >= 2026 ? (hcp2026[p.id]?.inicial ?? p.handicap) : p.handicap);
               return (
@@ -3227,7 +3234,7 @@ function PhotoCleanup({ rounds, photoIndex }) {
   );
 }
 
-function Settings({players, savePlayers, rounds, saveRounds, hcp2026, saveHcp2026, photoIndex}) {
+function Settings({players, savePlayers, rounds, saveRounds, hcp2026, saveHcp2026, photoIndex, adminPin, saveAdminPin}) {
   const resetToDefault = async () => {
     if (!confirm("¿Restaurar datos originales del Excel 2025?")) return;
     await loadHistoric2025(); // el histórico vive fuera del bundle
@@ -3240,6 +3247,34 @@ function Settings({players, savePlayers, rounds, saveRounds, hcp2026, saveHcp202
     }
   };
   const clearAll = () => { if (confirm("⚠️ ¿Borrar TODO?")) { savePlayers([]); saveRounds([]); } };
+
+  // ===== Cambio de contraseña admin =====
+  const [pinForm, setPinForm] = useState({current:"", nuevo:"", confirm:""});
+  const [pinMsg, setPinMsg] = useState(null); // {type:"ok"|"err", text}
+  const [showPins, setShowPins] = useState(false);
+
+  const changePin = async () => {
+    const {current, nuevo, confirm: conf} = pinForm;
+    if (!current || !nuevo || !conf) {
+      setPinMsg({type:"err", text:"Completa todos los campos"}); return;
+    }
+    if (current !== adminPin) {
+      setPinMsg({type:"err", text:"Contraseña actual incorrecta"}); return;
+    }
+    if (nuevo.length < 4) {
+      setPinMsg({type:"err", text:"La nueva contraseña debe tener al menos 4 caracteres"}); return;
+    }
+    if (nuevo !== conf) {
+      setPinMsg({type:"err", text:"Las contraseñas nuevas no coinciden"}); return;
+    }
+    if (nuevo === current) {
+      setPinMsg({type:"err", text:"La nueva contraseña es igual a la actual"}); return;
+    }
+    await saveAdminPin(nuevo);
+    setPinForm({current:"", nuevo:"", confirm:""});
+    setPinMsg({type:"ok", text:"✅ Contraseña actualizada correctamente"});
+    setTimeout(() => setPinMsg(null), 4000);
+  };
 
   // ===== Gestión de Jugadores =====
   const [newPlayer, setNewPlayer] = useState({name:"", inicial:"", fed:""});
@@ -3442,6 +3477,44 @@ function Settings({players, savePlayers, rounds, saveRounds, hcp2026, saveHcp202
             );
           })}
         </tbody></table></div>
+      </div>
+
+      {/* Cambio de Contraseña Admin */}
+      <div style={S.card}>
+        <div style={S.cardHdr}>
+          <h2 style={{...S.cardTitle,margin:0}}>🔐 Cambiar Contraseña Admin</h2>
+          <button
+            style={{...S.btn,...S.btnS,fontSize:11,padding:"4px 10px"}}
+            onClick={()=>setShowPins(v => !v)}
+          >{showPins ? "🙈 Ocultar" : "👁️ Mostrar"}</button>
+        </div>
+        <p style={{fontSize:12,color:"#6b7280",marginBottom:12}}>La nueva contraseña se guardará en Firebase y aplicará a todos los dispositivos.</p>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr auto",gap:8,alignItems:"end"}}>
+          <div>
+            <label style={{fontSize:11,color:"#6b7280"}}>Contraseña actual</label>
+            <input style={S.input} type={showPins ? "text" : "password"} value={pinForm.current}
+              onChange={e => { setPinForm({...pinForm, current: e.target.value}); setPinMsg(null); }} />
+          </div>
+          <div>
+            <label style={{fontSize:11,color:"#6b7280"}}>Nueva contraseña</label>
+            <input style={S.input} type={showPins ? "text" : "password"} value={pinForm.nuevo}
+              onChange={e => { setPinForm({...pinForm, nuevo: e.target.value}); setPinMsg(null); }} />
+          </div>
+          <div>
+            <label style={{fontSize:11,color:"#6b7280"}}>Confirmar nueva</label>
+            <input style={S.input} type={showPins ? "text" : "password"} value={pinForm.confirm}
+              onChange={e => { setPinForm({...pinForm, confirm: e.target.value}); setPinMsg(null); }} />
+          </div>
+          <button style={{...S.btn,...S.btnP,padding:"9px 14px",fontSize:12}} onClick={changePin}>Guardar</button>
+        </div>
+        {pinMsg && (
+          <div style={{marginTop:10,padding:"8px 12px",borderRadius:7,fontSize:12,fontWeight:600,
+            backgroundColor: pinMsg.type==="ok" ? "#f0fdf4" : "#fef2f2",
+            color: pinMsg.type==="ok" ? "#065f46" : "#991b1b",
+            border: `1px solid ${pinMsg.type==="ok" ? "#86efac" : "#fca5a5"}`}}>
+            {pinMsg.text}
+          </div>
+        )}
       </div>
 
       <PhotoCleanup rounds={rounds} photoIndex={photoIndex} />
