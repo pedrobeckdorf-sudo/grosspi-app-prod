@@ -797,7 +797,7 @@ export default function App() {
         {view==="stats" && <Stats allRounds={rounds} players={players} rankings={rankings} year={year} hcp2026={hcp2026} availableYears={availableYears} />}
         {view==="compare" && <Compare rankings={rankings} cmpIds={cmpIds} setCmpIds={setCmpIds} rounds={yearRounds} allRounds={rounds} players={players} hcp2026={hcp2026} />}
         {view==="manual" && isAdmin && <ManualEntry players={players} allRounds={rounds} yearRounds={yearRounds} saveRounds={saveRounds} nav={nav} pending={pending} removePendingRequest={removePendingRequest} photoIndex={photoIndex} />}
-        {view==="manual" && !isAdmin && <PlayerPhotoUpload players={players} addPendingRequest={addPendingRequest} />}
+        {view==="manual" && !isAdmin && <PlayerPhotoUpload players={players} addPendingRequest={addPendingRequest} yearRounds={yearRounds} />}
         {view==="reglamento" && <Reglamento hcp2026={hcp2026} saveHcp2026={saveHcp2026} isAdmin={isAdmin} />}
         {view==="settings" && isAdmin && <Settings players={players} savePlayers={savePlayers} rounds={rounds} saveRounds={saveRounds} hcp2026={hcp2026} saveHcp2026={saveHcp2026} photoIndex={photoIndex} adminPin={adminPin} saveAdminPin={saveAdminPin} />}
         {view==="settings" && !isAdmin && <div style={S.empty}>🔒 Acceso restringido a administradores</div>}
@@ -2026,10 +2026,24 @@ function compressPhotoForDB(dataUrl) {
 }
 
 // ======== PLAYER PHOTO UPLOAD (jugadores) ========
-function PlayerPhotoUpload({ players, addPendingRequest }) {
-  const [form, setForm] = useState({ date: new Date().toISOString().split("T")[0], name: "", playerId: "" });
+function PlayerPhotoUpload({ players, addPendingRequest, yearRounds }) {
+  const [form, setForm] = useState({ date: new Date().toISOString().split("T")[0], name: "" });
+  const [selected, setSelected] = useState([]);   // varios jugadores comparten la misma tarjeta
   const [photo, setPhoto] = useState(null);
-  const [sent, setSent] = useState(false);
+  const [sent, setSent] = useState(null);
+
+  const nameOf = pid => players.find(p => p.id === pid)?.name || pid;
+
+  const togglePlayer = pid =>
+    setSelected(prev => prev.includes(pid) ? prev.filter(x => x !== pid) : [...prev, pid]);
+
+  // Jugadores que ya tienen tarjeta cargada en la ronda elegida (aviso, no bloqueo:
+  // el admin es quien decide al ingresar los scores)
+  const playersInRound = useMemo(() => {
+    const r = (yearRounds || []).find(r => r.name === form.name);
+    return r?.scores ? Object.keys(r.scores) : [];
+  }, [yearRounds, form.name]);
+  const yaCargados = selected.filter(pid => playersInRound.includes(pid));
 
   const handlePhoto = async f => {
     if (!f?.type?.startsWith("image/")) return;
@@ -2037,25 +2051,31 @@ function PlayerPhotoUpload({ players, addPendingRequest }) {
     setPhoto(compressed);
   };
 
+  const puedeEnviar = selected.length > 0 && form.name && form.date && photo;
+
   const submit = async () => {
-    if (!form.playerId || !form.name || !form.date || !photo) return;
-    // Compress further for Firebase storage (~10-20KB)
+    if (!puedeEnviar) return;
     const photoForDB = await compressPhotoForDB(photo);
+    const nombres = selected.map(nameOf);
     const newEntry = {
       id: "req" + Date.now(),
       roundName: form.name,
       date: form.date,
-      playerId: form.playerId,
-      playerName: players.find(p => p.id === form.playerId)?.name || form.playerId,
+      playerIds: selected,
+      playerNames: nombres.join(", "),
+      // compatibilidad con solicitudes antiguas de un solo jugador
+      playerId: selected[0],
+      playerName: nombres.join(", "),
       photo: photoForDB,
       submittedAt: new Date().toISOString(),
       status: "pending"
     };
     await addPendingRequest(newEntry);
-    setSent(true);
-    setForm({ date: new Date().toISOString().split("T")[0], name: "", playerId: "" });
+    setSent(selected.length > 1 ? `Tarjeta enviada con ${selected.length} jugadores` : "Foto enviada correctamente");
+    setForm({ date: new Date().toISOString().split("T")[0], name: "" });
+    setSelected([]);
     setPhoto(null);
-    setTimeout(() => setSent(false), 4000);
+    setTimeout(() => setSent(null), 5000);
   };
 
   return (
@@ -2067,36 +2087,73 @@ function PlayerPhotoUpload({ players, addPendingRequest }) {
 
       {sent && (
         <div style={{backgroundColor:"#f0fdf4",border:"1px solid #86efac",borderRadius:10,padding:"14px 18px",marginBottom:16,textAlign:"center"}}>
-          <span style={{color:"#065f46",fontWeight:600,fontSize:14}}>✅ Foto enviada correctamente — el admin la revisará pronto</span>
+          <span style={{color:"#065f46",fontWeight:600,fontSize:14}}>✅ {sent} — el admin la revisará pronto</span>
         </div>
       )}
 
       <div style={S.card}>
         <h2 style={S.cardTitle}>Datos de la Ronda</h2>
-        <div style={{display:"flex",gap:12,flexWrap:"wrap",marginBottom:16}}>
-          <div style={{flex:1,minWidth:180}}>
+        <div style={{display:"flex",gap:12,flexWrap:"wrap"}}>
+          <div style={{flex:1,minWidth:200}}>
             <label style={S.label}>Ronda</label>
             <select style={S.input} value={form.name} onChange={e=>setForm({...form,name:e.target.value})}>
               <option value="">Seleccionar ronda...</option>
               {ROUND_NAMES.map(rn => <option key={rn} value={rn}>{rn}</option>)}
             </select>
           </div>
-          <div style={{flex:1,minWidth:150}}>
+          <div style={{flex:1,minWidth:160}}>
             <label style={S.label}>Fecha</label>
             <input style={S.input} type="date" value={form.date} onChange={e=>setForm({...form,date:e.target.value})} />
-          </div>
-          <div style={{flex:1,minWidth:180}}>
-            <label style={S.label}>Jugador</label>
-            <select style={S.input} value={form.playerId} onChange={e=>setForm({...form,playerId:e.target.value})}>
-              <option value="">Seleccionar...</option>
-              {players.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-            </select>
           </div>
         </div>
       </div>
 
+      {/* Selección de jugadores — misma lógica que la vista de admin */}
+      <div style={S.card}>
+        <h2 style={S.cardTitle}>
+          Jugadores de la tarjeta {selected.length > 0 && <span style={{color:"#4a6741",fontWeight:600,fontSize:13}}>· {selected.length} seleccionado{selected.length>1?"s":""}</span>}
+        </h2>
+        <p style={{...S.sub,marginTop:0,marginBottom:10,fontSize:12}}>
+          Marca a todos los que jugaron en esta tarjeta — con una sola foto basta para todos.
+        </p>
+        <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+          {players.map(p => {
+            const isSel = selected.includes(p.id);
+            const already = playersInRound.includes(p.id);
+            return (
+              <button key={p.id} onClick={()=>togglePlayer(p.id)}
+                style={{
+                  padding:"7px 12px",borderRadius:16,fontSize:12,cursor:"pointer",minHeight:36,
+                  fontWeight: isSel ? 700 : 500,
+                  border: isSel ? "2px solid #1a472a" : already ? "1px solid #fbbf24" : "1px solid #d1d5db",
+                  backgroundColor: isSel ? "#1a472a" : already ? "#fffbeb" : "#fff",
+                  color: isSel ? "#fff" : already ? "#92400e" : "#374151",
+                }}>
+                {isSel ? "✓ " : ""}{p.name}{already ? " ⚠️" : ""}
+              </button>
+            );
+          })}
+        </div>
+        {form.name && playersInRound.length > 0 && (
+          <div style={{fontSize:11,color:"#92400e",marginTop:10}}>⚠️ = ya tiene tarjeta cargada en {form.name}</div>
+        )}
+      </div>
+
+      {/* Aviso de duplicado — informativo, el admin decide al cargar los scores */}
+      {yaCargados.length > 0 && (
+        <div style={{...S.card,borderLeft:"4px solid #f59e0b",backgroundColor:"#fffbeb"}}>
+          <div style={{fontSize:13,color:"#92400e"}}>
+            ⚠️ <b>{yaCargados.map(nameOf).join(", ")}</b> ya {yaCargados.length===1?"tiene":"tienen"} una tarjeta cargada en <b>{form.name}</b>.
+            Si esta es una fecha adicional, selecciona <b>Adicional 1</b> o <b>Adicional 2</b> como ronda para no pisar el score anterior.
+          </div>
+        </div>
+      )}
+
       <div style={S.card}>
         <h2 style={S.cardTitle}>📷 Foto de la Tarjeta <span style={{color:"#ef4444",fontSize:12}}>*obligatoria</span></h2>
+        {selected.length > 1 && (
+          <p style={{fontSize:12,color:"#6b7280",marginTop:0}}>Una sola foto queda asociada a los {selected.length} jugadores.</p>
+        )}
         {photo ? (
           <div style={{textAlign:"center"}}>
             <img src={photo} alt="Tarjeta" style={{maxWidth:"100%",maxHeight:300,borderRadius:10,border:"1px solid #e5e7eb"}} />
@@ -2121,16 +2178,16 @@ function PlayerPhotoUpload({ players, addPendingRequest }) {
       </div>
 
       <button
-        style={{...S.btn,...S.btnP,width:"100%",padding:"14px 24px",fontSize:15,
-          opacity:(!form.name||!form.playerId||!form.date||!photo)?0.4:1}}
+        style={{...S.btn,...S.btnP,width:"100%",padding:"14px 24px",fontSize:15,opacity: puedeEnviar ? 1 : 0.4}}
         onClick={submit}
-        disabled={!form.name||!form.playerId||!form.date||!photo}
+        disabled={!puedeEnviar}
       >
-        📤 Enviar al Admin
+        📤 {selected.length > 1 ? `Enviar tarjeta de ${selected.length} jugadores` : "Enviar al Admin"}
       </button>
     </div>
   );
 }
+
 
 // ======== CARGAR RONDA ========
 const ROUND_NAMES = [
@@ -2176,8 +2233,9 @@ function ManualEntry({players, allRounds, yearRounds, saveRounds, nav, pending, 
   const approveRequest = (req) => {
     // Pre-llena la tarjeta pero NO saca la solicitud de pendientes hasta guardar
     setMeta({ date: req.date, name: req.roundName });
-    setSelected([req.playerId]);
-    setGrid({ [req.playerId]: emptyScores() });
+    const pids = (req.playerIds && req.playerIds.length) ? req.playerIds : [req.playerId];
+    setSelected(pids);
+    setGrid(Object.fromEntries(pids.map(pid => [pid, emptyScores()])));
     setOverwriteOk({});
     setPhoto(req.photo);
     setActiveReqId(req.id);
@@ -2186,7 +2244,7 @@ function ManualEntry({players, allRounds, yearRounds, saveRounds, nav, pending, 
   };
 
   const rejectRequest = (req) => {
-    if (!confirm(`¿Rechazar la solicitud de ${req.playerName} para ${req.roundName}?`)) return;
+    if (!confirm(`¿Rechazar la solicitud de ${req.playerNames || req.playerName} para ${req.roundName}?`)) return;
     removePendingRequest(req.id);
     if (previewReq?.id === req.id) setPreviewReq(null);
     if (activeReqId === req.id) { setActiveReqId(null); setPhoto(null); }
@@ -2325,7 +2383,7 @@ function ManualEntry({players, allRounds, yearRounds, saveRounds, nav, pending, 
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
                   <div>
                     {activeReqId===req.id && <span style={{fontSize:10,padding:"1px 7px",borderRadius:8,backgroundColor:"#1a472a",color:"#fff",fontWeight:700,marginRight:6}}>✏️ En curso</span>}
-                    <span style={{fontWeight:700,color:"#1a472a",fontSize:14}}>{req.playerName}</span>
+                    <span style={{fontWeight:700,color:"#1a472a",fontSize:14}}>{(req.playerIds && req.playerIds.length > 1) ? "👥 " : ""}{req.playerNames || req.playerName}</span>
                     <span style={{color:"#6b7280",fontSize:12,marginLeft:8}}>{req.roundName}</span>
                     <span style={{color:"#9ca3af",fontSize:11,marginLeft:8}}>{req.date ? new Date(req.date).toLocaleDateString("es-CL",{day:"numeric",month:"short"}) : ""}</span>
                   </div>
