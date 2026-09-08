@@ -2206,6 +2206,35 @@ const ROUND_NAMES = [
 
 const MAX_TARJETA = 8;
 
+// La tarjeta adjunta acompaña los pasos 2, 3 y 4: el admin lee de la foto para
+// decidir quiénes jugaron, qué ronda le toca a cada uno y transcribir los scores.
+// Va pegada arriba (sticky) y compacta para no empujar el contenido del paso.
+function TarjetaAdjunta({ src, onZoom }) {
+  const [abierta, setAbierta] = useState(true);
+  if (!src) return null;
+  const btn = {fontSize:11,fontWeight:600,padding:"3px 9px",borderRadius:6,cursor:"pointer",
+    border:"1px solid #d1d5db",backgroundColor:"#fff",color:"#374151"};
+  return (
+    <div style={{position:"sticky",top:8,zIndex:50,marginBottom:14,backgroundColor:"#fff",
+      border:"1px solid #d1d5db",borderRadius:10,boxShadow:"0 2px 10px rgba(0,0,0,0.08)",overflow:"hidden"}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,
+        padding:"7px 12px",backgroundColor:"#f9fafb",borderBottom: abierta ? "1px solid #e5e7eb" : "none"}}>
+        <span style={{fontSize:12,fontWeight:700,color:"#374151"}}>📷 Tarjeta de respaldo</span>
+        <div style={{display:"flex",gap:6}}>
+          <button style={btn} onClick={onZoom}>🔍 Ampliar</button>
+          <button style={btn} onClick={()=>setAbierta(v=>!v)}>{abierta ? "▲ Ocultar" : "▼ Ver"}</button>
+        </div>
+      </div>
+      {abierta && (
+        <div style={{backgroundColor:"#111",padding:4}}>
+          <img src={src} alt="Tarjeta" onClick={onZoom}
+            style={{maxWidth:"100%",maxHeight:200,objectFit:"contain",cursor:"zoom-in",display:"block",margin:"0 auto"}} />
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Stepper({ labels, current, onGoTo }) {
   return (
     <div style={{display:"flex",gap:6,marginBottom:16,flexWrap:"wrap"}}>
@@ -2679,6 +2708,8 @@ function ManualEntry({players, allRounds, yearRounds, saveRounds, nav, pending, 
         </div>
       )}
 
+      {step >= 2 && photo && <TarjetaAdjunta src={photo} onZoom={()=>setLightboxSrc(photo)} />}
+
       {/* ---- PASO 1 ---- */}
       {step === 1 && (
         <>
@@ -2785,10 +2816,11 @@ function ManualEntry({players, allRounds, yearRounds, saveRounds, nav, pending, 
             <h2 style={S.cardTitle}>📷 Foto de Respaldo (opcional)</h2>
             {selected.length > 1 && <p style={{fontSize:12,color:"#6b7280",marginTop:0}}>Una sola foto queda asociada a los {selected.length} jugadores.</p>}
             {photo ? (
-              <div style={{textAlign:"center"}}>
-                <img src={photo} alt="Tarjeta" onClick={()=>setLightboxSrc(photo)}
-                  style={{maxWidth:"100%",maxHeight:240,borderRadius:10,border:"1px solid #e5e7eb",cursor:"zoom-in"}} />
-                <button style={{...S.btn,...S.btnS,marginTop:8,fontSize:12,padding:"8px 16px"}} onClick={()=>setPhoto(null)}>✕ Quitar foto</button>
+              // Ya se muestra arriba pegada al scroll: acá solo el estado y quitarla
+              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,flexWrap:"wrap",
+                padding:"10px 14px",backgroundColor:"#f0fdf4",border:"1px solid #86efac",borderRadius:8}}>
+                <span style={{fontSize:13,fontWeight:600,color:"#065f46"}}>✅ Foto adjunta — se ve arriba mientras cargas</span>
+                <button style={{...S.btn,...S.btnS,fontSize:12,padding:"7px 14px"}} onClick={()=>setPhoto(null)}>✕ Quitar foto</button>
               </div>
             ) : (
               <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
