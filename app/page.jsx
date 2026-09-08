@@ -2027,62 +2027,94 @@ function compressPhotoForDB(dataUrl) {
 
 // ======== PLAYER PHOTO UPLOAD (jugadores) ========
 function PlayerPhotoUpload({ players, addPendingRequest, yearRounds }) {
-  const [form, setForm] = useState({ date: new Date().toISOString().split("T")[0], name: "" });
-  const [selected, setSelected] = useState([]);   // varios jugadores comparten la misma tarjeta
+  const [step, setStep] = useState(1);
+  const [date, setDate] = useState(new Date().toISOString().split("T")[0]);
+  const [count, setCount] = useState(null);
+  const [selected, setSelected] = useState([]);
+  const [baseRound, setBaseRound] = useState("");
+  const [playerRound, setPlayerRound] = useState({});
   const [photo, setPhoto] = useState(null);
   const [sent, setSent] = useState(null);
+  const [sending, setSending] = useState(false);
 
   const nameOf = pid => players.find(p => p.id === pid)?.name || pid;
 
-  const togglePlayer = pid =>
-    setSelected(prev => prev.includes(pid) ? prev.filter(x => x !== pid) : [...prev, pid]);
+  const reset = () => {
+    setStep(1); setCount(null); setSelected([]); setBaseRound(""); setPlayerRound({}); setPhoto(null);
+  };
 
-  // Jugadores que ya tienen tarjeta cargada en la ronda elegida (aviso, no bloqueo:
-  // el admin es quien decide al ingresar los scores)
-  const playersInRound = useMemo(() => {
-    const r = (yearRounds || []).find(r => r.name === form.name);
+  const togglePlayer = pid => setSelected(prev => {
+    if (prev.includes(pid)) {
+      setPlayerRound(pr => { const {[pid]:_, ...rest} = pr; return rest; });
+      return prev.filter(x => x !== pid);
+    }
+    return [...prev, pid];
+  });
+
+  const roundOf = useCallback((pid) => playerRound[pid] || baseRound, [playerRound, baseRound]);
+
+  const playersOfRound = useCallback((rn) => {
+    const r = (yearRounds || []).find(x => x.name === rn);
     return r?.scores ? Object.keys(r.scores) : [];
-  }, [yearRounds, form.name]);
-  const yaCargados = selected.filter(pid => playersInRound.includes(pid));
+  }, [yearRounds]);
+
+  const dupes = useMemo(
+    () => selected.filter(pid => roundOf(pid) && playersOfRound(roundOf(pid)).includes(pid)),
+    [selected, roundOf, playersOfRound]
+  );
+
+  const freeAdicionalFor = useCallback(
+    (pid) => ROUND_NAMES.filter(rn => rn.startsWith("Adicional") && !playersOfRound(rn).includes(pid)),
+    [playersOfRound]
+  );
 
   const handlePhoto = async f => {
     if (!f?.type?.startsWith("image/")) return;
-    const compressed = await compressPhoto(f);
-    setPhoto(compressed);
+    setPhoto(await compressPhoto(f));
   };
-
-  const puedeEnviar = selected.length > 0 && form.name && form.date && photo;
 
   const submit = async () => {
-    if (!puedeEnviar) return;
-    const photoForDB = await compressPhotoForDB(photo);
-    const nombres = selected.map(nameOf);
-    const newEntry = {
-      id: "req" + Date.now(),
-      roundName: form.name,
-      date: form.date,
-      playerIds: selected,
-      playerNames: nombres.join(", "),
-      // compatibilidad con solicitudes antiguas de un solo jugador
-      playerId: selected[0],
-      playerName: nombres.join(", "),
-      photo: photoForDB,
-      submittedAt: new Date().toISOString(),
-      status: "pending"
-    };
-    await addPendingRequest(newEntry);
-    setSent(selected.length > 1 ? `Tarjeta enviada con ${selected.length} jugadores` : "Foto enviada correctamente");
-    setForm({ date: new Date().toISOString().split("T")[0], name: "" });
-    setSelected([]);
-    setPhoto(null);
-    setTimeout(() => setSent(null), 5000);
+    if (!photo || !selected.length || !baseRound || sending) return;
+    setSending(true);
+    try {
+      const photoForDB = await compressPhotoForDB(photo);
+      // Si la tarjeta se divide en varias rondas, se manda una solicitud por ronda
+      const grupos = {};
+      selected.forEach(pid => { const rn = roundOf(pid); (grupos[rn] = grupos[rn] || []).push(pid); });
+      const stamp = Date.now();
+      let i = 0;
+      for (const [rn, pids] of Object.entries(grupos)) {
+        const nombres = pids.map(nameOf);
+        await addPendingRequest({
+          id: "req" + stamp + "-" + (++i),
+          roundName: rn,
+          date,
+          playerIds: pids,
+          playerNames: nombres.join(", "),
+          // compatibilidad con solicitudes de un solo jugador
+          playerId: pids[0],
+          playerName: nombres.join(", "),
+          photo: photoForDB,
+          submittedAt: new Date().toISOString(),
+          status: "pending",
+        });
+      }
+      const nR = Object.keys(grupos).length;
+      setSent(`Tarjeta enviada — ${selected.length} jugador${selected.length>1?"es":""}${nR>1?` en ${nR} rondas`:""}`);
+      reset();
+      setTimeout(() => setSent(null), 6000);
+    } finally {
+      setSending(false);
+    }
   };
+
+  const PASOS = ["Cuántos jugaron", "Quiénes jugaron", "Qué ronda", "Foto"];
 
   return (
     <div style={S.view}>
       <div style={S.hdr}>
         <h1 style={S.title}>Subir Foto de Tarjeta</h1>
-        <p style={S.sub}>Sube una foto de tu scorecard — el admin validará e ingresará los datos</p>
+        <p style={S.sub}>Paso a paso — el admin validará e ingresará los scores</p>
       </div>
 
       {sent && (
@@ -2091,100 +2123,71 @@ function PlayerPhotoUpload({ players, addPendingRequest, yearRounds }) {
         </div>
       )}
 
-      <div style={S.card}>
-        <h2 style={S.cardTitle}>Datos de la Ronda</h2>
-        <div style={{display:"flex",gap:12,flexWrap:"wrap"}}>
-          <div style={{flex:1,minWidth:200}}>
-            <label style={S.label}>Ronda</label>
-            <select style={S.input} value={form.name} onChange={e=>setForm({...form,name:e.target.value})}>
-              <option value="">Seleccionar ronda...</option>
-              {ROUND_NAMES.map(rn => <option key={rn} value={rn}>{rn}</option>)}
-            </select>
-          </div>
-          <div style={{flex:1,minWidth:160}}>
-            <label style={S.label}>Fecha</label>
-            <input style={S.input} type="date" value={form.date} onChange={e=>setForm({...form,date:e.target.value})} />
-          </div>
-        </div>
-      </div>
+      <Stepper labels={PASOS} current={step} onGoTo={setStep} />
 
-      {/* Selección de jugadores — misma lógica que la vista de admin */}
-      <div style={S.card}>
-        <h2 style={S.cardTitle}>
-          Jugadores de la tarjeta {selected.length > 0 && <span style={{color:"#4a6741",fontWeight:600,fontSize:13}}>· {selected.length} seleccionado{selected.length>1?"s":""}</span>}
-        </h2>
-        <p style={{...S.sub,marginTop:0,marginBottom:10,fontSize:12}}>
-          Marca a todos los que jugaron en esta tarjeta — con una sola foto basta para todos.
-        </p>
-        <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
-          {players.map(p => {
-            const isSel = selected.includes(p.id);
-            const already = playersInRound.includes(p.id);
-            return (
-              <button key={p.id} onClick={()=>togglePlayer(p.id)}
-                style={{
-                  padding:"7px 12px",borderRadius:16,fontSize:12,cursor:"pointer",minHeight:36,
-                  fontWeight: isSel ? 700 : 500,
-                  border: isSel ? "2px solid #1a472a" : already ? "1px solid #fbbf24" : "1px solid #d1d5db",
-                  backgroundColor: isSel ? "#1a472a" : already ? "#fffbeb" : "#fff",
-                  color: isSel ? "#fff" : already ? "#92400e" : "#374151",
-                }}>
-                {isSel ? "✓ " : ""}{p.name}{already ? " ⚠️" : ""}
-              </button>
-            );
-          })}
-        </div>
-        {form.name && playersInRound.length > 0 && (
-          <div style={{fontSize:11,color:"#92400e",marginTop:10}}>⚠️ = ya tiene tarjeta cargada en {form.name}</div>
-        )}
-      </div>
-
-      {/* Aviso de duplicado — informativo, el admin decide al cargar los scores */}
-      {yaCargados.length > 0 && (
-        <div style={{...S.card,borderLeft:"4px solid #f59e0b",backgroundColor:"#fffbeb"}}>
-          <div style={{fontSize:13,color:"#92400e"}}>
-            ⚠️ <b>{yaCargados.map(nameOf).join(", ")}</b> ya {yaCargados.length===1?"tiene":"tienen"} una tarjeta cargada en <b>{form.name}</b>.
-            Envíala igual: el admin la cargará como <b>Adicional</b> para quien corresponda, sin mover al resto de la tarjeta.
-            Si <b>toda</b> la tarjeta es una fecha adicional, elige directamente Adicional 1 o 2 arriba.
-          </div>
-        </div>
+      {step === 1 && (
+        <>
+          <StepCantidad date={date} setDate={setDate} count={count} setCount={setCount} />
+          <StepNav onNext={()=>setStep(2)} nextDisabled={!count || !date} />
+        </>
       )}
 
-      <div style={S.card}>
-        <h2 style={S.cardTitle}>📷 Foto de la Tarjeta <span style={{color:"#ef4444",fontSize:12}}>*obligatoria</span></h2>
-        {selected.length > 1 && (
-          <p style={{fontSize:12,color:"#6b7280",marginTop:0}}>Una sola foto queda asociada a los {selected.length} jugadores.</p>
-        )}
-        {photo ? (
-          <div style={{textAlign:"center"}}>
-            <img src={photo} alt="Tarjeta" style={{maxWidth:"100%",maxHeight:300,borderRadius:10,border:"1px solid #e5e7eb"}} />
-            <button style={{...S.btn,...S.btnS,marginTop:10,fontSize:12,padding:"8px 16px"}} onClick={()=>setPhoto(null)}>✕ Quitar foto</button>
-          </div>
-        ) : (
-          <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
-            <label style={{flex:1,minWidth:130,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:6,padding:"20px 12px",borderRadius:10,border:"2px dashed #86efac",backgroundColor:"#f0fdf4",cursor:"pointer",textAlign:"center"}}>
-              <span style={{fontSize:32}}>📷</span>
-              <span style={{fontSize:13,fontWeight:600,color:"#1a472a"}}>Sacar foto</span>
-              <span style={{fontSize:11,color:"#6b7280"}}>Cámara del celular</span>
-              <input type="file" accept="image/*" capture="environment" style={{display:"none"}} onChange={e=>handlePhoto(e.target.files[0])} />
-            </label>
-            <label style={{flex:1,minWidth:130,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:6,padding:"20px 12px",borderRadius:10,border:"2px dashed #d1d5db",backgroundColor:"#f9fafb",cursor:"pointer",textAlign:"center"}}>
-              <span style={{fontSize:32}}>🖼️</span>
-              <span style={{fontSize:13,fontWeight:600,color:"#374151"}}>Desde galería</span>
-              <span style={{fontSize:11,color:"#6b7280"}}>Elegir archivo</span>
-              <input type="file" accept="image/*" style={{display:"none"}} onChange={e=>handlePhoto(e.target.files[0])} />
-            </label>
-          </div>
-        )}
-      </div>
+      {step === 2 && (
+        <>
+          <StepJugadores players={players} count={count} selected={selected} onToggle={togglePlayer} yaCargadosEn={[]} />
+          <StepNav onBack={()=>setStep(1)} onNext={()=>setStep(3)} nextDisabled={selected.length !== count}
+            aviso={selected.length > 0 && selected.length !== count ? `Faltan ${count - selected.length} de ${count} jugadores` : null} />
+        </>
+      )}
 
-      <button
-        style={{...S.btn,...S.btnP,width:"100%",padding:"14px 24px",fontSize:15,opacity: puedeEnviar ? 1 : 0.4}}
-        onClick={submit}
-        disabled={!puedeEnviar}
-      >
-        📤 {selected.length > 1 ? `Enviar tarjeta de ${selected.length} jugadores` : "Enviar al Admin"}
-      </button>
+      {step === 3 && (
+        <>
+          <StepRondas
+            players={players} selected={selected}
+            baseRound={baseRound} setBaseRound={setBaseRound}
+            playerRound={playerRound} setPlayerRound={setPlayerRound}
+            roundOf={roundOf} playersOfRound={playersOfRound} freeAdicionalFor={freeAdicionalFor}
+            dupes={dupes} overwriteOk={{}} setOverwriteOk={null} bloquea={false}
+          />
+          <StepNav onBack={()=>setStep(2)} onNext={()=>setStep(4)} nextDisabled={!baseRound} nextLabel="Adjuntar foto →" />
+        </>
+      )}
+
+      {step === 4 && (
+        <>
+          <div style={S.card}>
+            <h2 style={S.cardTitle}>📷 Foto de la Tarjeta <span style={{color:"#ef4444",fontSize:12}}>*obligatoria</span></h2>
+            <div style={{padding:"9px 12px",backgroundColor:"#f9fafb",borderRadius:8,fontSize:12,color:"#374151",marginBottom:12}}>
+              {selected.map(pid => <div key={pid}><b>{nameOf(pid)}</b> · {roundOf(pid)}</div>)}
+              <div style={{color:"#6b7280",marginTop:4}}>{new Date(date+"T12:00:00").toLocaleDateString("es-CL",{day:"numeric",month:"long",year:"numeric"})}</div>
+            </div>
+            {photo ? (
+              <div style={{textAlign:"center"}}>
+                <img src={photo} alt="Tarjeta" style={{maxWidth:"100%",maxHeight:300,borderRadius:10,border:"1px solid #e5e7eb"}} />
+                <button style={{...S.btn,...S.btnS,marginTop:10,fontSize:12,padding:"8px 16px"}} onClick={()=>setPhoto(null)}>✕ Quitar foto</button>
+              </div>
+            ) : (
+              <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+                <label style={{flex:1,minWidth:130,display:"flex",flexDirection:"column",alignItems:"center",gap:6,padding:"20px 12px",borderRadius:10,border:"2px dashed #86efac",backgroundColor:"#f0fdf4",cursor:"pointer",textAlign:"center"}}>
+                  <span style={{fontSize:32}}>📷</span>
+                  <span style={{fontSize:13,fontWeight:600,color:"#1a472a"}}>Sacar foto</span>
+                  <span style={{fontSize:11,color:"#6b7280"}}>Cámara del celular</span>
+                  <input type="file" accept="image/*" capture="environment" style={{display:"none"}} onChange={e=>handlePhoto(e.target.files[0])} />
+                </label>
+                <label style={{flex:1,minWidth:130,display:"flex",flexDirection:"column",alignItems:"center",gap:6,padding:"20px 12px",borderRadius:10,border:"2px dashed #d1d5db",backgroundColor:"#f9fafb",cursor:"pointer",textAlign:"center"}}>
+                  <span style={{fontSize:32}}>🖼️</span>
+                  <span style={{fontSize:13,fontWeight:600,color:"#374151"}}>Desde galería</span>
+                  <span style={{fontSize:11,color:"#6b7280"}}>Elegir archivo</span>
+                  <input type="file" accept="image/*" style={{display:"none"}} onChange={e=>handlePhoto(e.target.files[0])} />
+                </label>
+              </div>
+            )}
+          </div>
+          <StepNav onBack={()=>setStep(3)} onNext={submit} nextDisabled={!photo || sending}
+            nextLabel={sending ? "Enviando..." : "📤 Enviar al Admin"}
+            aviso={!photo ? "La foto de la tarjeta es obligatoria" : null} />
+        </>
+      )}
     </div>
   );
 }
@@ -2197,20 +2200,264 @@ const ROUND_NAMES = [
   "Adicional 1","Adicional 2"
 ];
 
+// ======== FLUJO GUIADO DE CARGA (compartido admin / jugador) ========
+// Pasos: 1) cuántos compitieron  2) quiénes  3) qué ronda cada uno  4) scores/foto
+// Se separó en pasos porque el selector múltiple libre confundía a los jugadores.
+
+const MAX_TARJETA = 8;
+
+function Stepper({ labels, current, onGoTo }) {
+  return (
+    <div style={{display:"flex",gap:6,marginBottom:16,flexWrap:"wrap"}}>
+      {labels.map((l, i) => {
+        const n = i + 1, hecho = n < current, activo = n === current;
+        const clickable = hecho && !!onGoTo;
+        return (
+          <div key={l} onClick={clickable ? () => onGoTo(n) : undefined}
+            style={{
+              flex:"1 1 130px", minWidth:112, padding:"7px 10px", borderRadius:8,
+              cursor: clickable ? "pointer" : "default",
+              backgroundColor: activo ? "#1a472a" : hecho ? "#f0f7f0" : "#f9fafb",
+              border: activo ? "2px solid #1a472a" : hecho ? "1px solid #86efac" : "1px solid #e5e7eb",
+              color: activo ? "#fff" : hecho ? "#1a472a" : "#9ca3af",
+            }}>
+            <div style={{fontSize:10,fontWeight:700,letterSpacing:"0.04em",opacity:0.85}}>
+              {hecho ? "✓" : n} · PASO {n}
+            </div>
+            <div style={{fontSize:12,fontWeight: activo ? 700 : 500,lineHeight:1.25}}>{l}</div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function StepNav({ onBack, onNext, nextLabel = "Siguiente →", nextDisabled, aviso }) {
+  return (
+    <>
+      {aviso && (
+        <div style={{backgroundColor:"#fef2f2",border:"1px solid #fca5a5",borderRadius:10,padding:"11px 16px",
+          marginBottom:10,textAlign:"center",fontSize:13,color:"#991b1b",fontWeight:600}}>
+          {aviso}
+        </div>
+      )}
+      <div style={{display:"flex",gap:10,marginTop:4}}>
+        {onBack && (
+          <button style={{...S.btn,...S.btnS,padding:"14px 20px",fontSize:14}} onClick={onBack}>← Atrás</button>
+        )}
+        {onNext && (
+          <button style={{...S.btn,...S.btnP,flex:1,padding:"14px 20px",fontSize:15,opacity: nextDisabled ? 0.4 : 1}}
+            onClick={onNext} disabled={nextDisabled}>
+            {nextLabel}
+          </button>
+        )}
+      </div>
+    </>
+  );
+}
+
+// ---- PASO 1: fecha + cuántos compitieron ----
+function StepCantidad({ date, setDate, count, setCount }) {
+  return (
+    <div style={S.card}>
+      <h2 style={S.cardTitle}>¿Cuántos jugadores compitieron en Grosspi?</h2>
+
+      <div style={{padding:"12px 14px",backgroundColor:"#fffbeb",border:"1px solid #fde68a",
+        borderRadius:8,marginBottom:18,fontSize:13,color:"#92400e",lineHeight:1.5}}>
+        <b>⚠️ Ojo:</b> cuenta solo a los que van por su <b>ronda del campeonato</b>, no a todos los que
+        aparecen en la tarjeta. Si jugaron 4 pero solo 2 corren por Grosspi, marca <b>2</b>.
+      </div>
+
+      <label style={S.label}>Fecha en que jugaron</label>
+      <input style={{...S.input,maxWidth:220}} type="date" value={date} onChange={e=>setDate(e.target.value)} />
+
+      <div style={{marginTop:18}}>
+        <label style={S.label}>Cantidad de jugadores Grosspi</label>
+        <div style={{display:"flex",gap:8,flexWrap:"wrap",marginTop:4}}>
+          {Array.from({length:MAX_TARJETA},(_,i)=>i+1).map(n => (
+            <button key={n} onClick={()=>setCount(n)}
+              style={{
+                width:52,height:52,borderRadius:10,fontSize:19,fontWeight:700,cursor:"pointer",
+                border: count===n ? "2px solid #1a472a" : "1px solid #d1d5db",
+                backgroundColor: count===n ? "#1a472a" : "#fff",
+                color: count===n ? "#fff" : "#374151",
+              }}>
+              {n}
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---- PASO 2: quiénes ----
+function StepJugadores({ players, count, selected, onToggle, yaCargadosEn, rondaRef }) {
+  const faltan = count - selected.length;
+  return (
+    <div style={S.card}>
+      <h2 style={S.cardTitle}>
+        ¿Quiénes jugaron? <span style={{color: selected.length===count ? "#4a6741" : "#9ca3af",fontWeight:600,fontSize:13}}>
+          · {selected.length} de {count}
+        </span>
+      </h2>
+      <p style={{...S.sub,marginTop:0,marginBottom:12,fontSize:12}}>
+        {faltan > 0
+          ? `Marca ${faltan} jugador${faltan>1?"es":""} más.`
+          : "Ya están los " + count + ". Para cambiar a alguien, tócalo para desmarcarlo."}
+      </p>
+      <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+        {players.map(p => {
+          const isSel = selected.includes(p.id);
+          const bloqueado = !isSel && selected.length >= count;
+          const already = (yaCargadosEn || []).includes(p.id);
+          return (
+            <button key={p.id} onClick={()=>!bloqueado && onToggle(p.id)} disabled={bloqueado}
+              style={{
+                padding:"8px 13px",borderRadius:16,fontSize:12,minHeight:38,
+                cursor: bloqueado ? "not-allowed" : "pointer",
+                opacity: bloqueado ? 0.35 : 1,
+                fontWeight: isSel ? 700 : 500,
+                border: isSel ? "2px solid #1a472a" : already ? "1px solid #fbbf24" : "1px solid #d1d5db",
+                backgroundColor: isSel ? "#1a472a" : already ? "#fffbeb" : "#fff",
+                color: isSel ? "#fff" : already ? "#92400e" : "#374151",
+              }}>
+              {isSel ? "✓ " : ""}{p.name}{already ? " ⚠️" : ""}
+            </button>
+          );
+        })}
+      </div>
+      {rondaRef && (yaCargadosEn || []).length > 0 && (
+        <div style={{fontSize:11,color:"#92400e",marginTop:10}}>⚠️ = ya tiene tarjeta cargada en {rondaRef}</div>
+      )}
+    </div>
+  );
+}
+
+// ---- PASO 3: qué ronda jugó cada uno ----
+// Una ronda para todos (caso normal, un clic) + excepciones por jugador.
+function StepRondas({
+  players, selected, baseRound, setBaseRound, playerRound, setPlayerRound,
+  roundOf, playersOfRound, freeAdicionalFor, dupes, overwriteOk, setOverwriteOk, bloquea,
+}) {
+  const nameOf = pid => players.find(p => p.id === pid)?.name || pid;
+  const conExcepcion = selected.filter(pid => playerRound[pid] && playerRound[pid] !== baseRound);
+
+  return (
+    <>
+      <div style={S.card}>
+        <h2 style={S.cardTitle}>¿Qué ronda jugaron?</h2>
+        <p style={{...S.sub,marginTop:0,marginBottom:12,fontSize:12}}>
+          Elige la ronda del grupo. Si alguno va por una fecha adicional, cámbiaselo abajo — el resto no se mueve.
+        </p>
+        <select style={{...S.input,maxWidth:320}} value={baseRound} onChange={e=>{ setBaseRound(e.target.value); setPlayerRound({}); }}>
+          <option value="">Seleccionar ronda...</option>
+          {ROUND_NAMES.map(rn => <option key={rn} value={rn}>{rn}</option>)}
+        </select>
+      </div>
+
+      {baseRound && (
+        <div style={S.card}>
+          <h2 style={S.cardTitle}>Ronda de cada jugador</h2>
+          <div style={{display:"flex",flexDirection:"column",gap:8}}>
+            {selected.map(pid => {
+              const rn = roundOf(pid);
+              const dup = dupes.includes(pid);
+              const exc = !!playerRound[pid] && playerRound[pid] !== baseRound;
+              const libres = freeAdicionalFor(pid);
+              return (
+                <div key={pid} style={{
+                  padding:"10px 12px",borderRadius:8,
+                  border: dup ? "2px solid #dc2626" : exc ? "1px solid #f59e0b" : "1px solid #e5e7eb",
+                  backgroundColor: dup ? "#fef2f2" : exc ? "#fffbeb" : "#fff",
+                }}>
+                  <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
+                    <span style={{fontWeight:700,fontSize:13,color:"#1a472a",flex:"1 1 140px",minWidth:120}}>
+                      {nameOf(pid)}
+                    </span>
+                    <select
+                      value={rn}
+                      onChange={e=>setPlayerRound(pr => {
+                        if (e.target.value === baseRound) { const {[pid]:_, ...rest} = pr; return rest; }
+                        return {...pr, [pid]: e.target.value};
+                      })}
+                      style={{...S.input,width:"auto",minWidth:150,padding:"7px 8px",fontSize:12,
+                        border: dup ? "1px solid #dc2626" : exc ? "1px solid #f59e0b" : "1px solid #d1d5db",
+                        color: dup ? "#991b1b" : exc ? "#92400e" : "#374151",
+                        fontWeight: (dup||exc) ? 700 : 500}}>
+                      {ROUND_NAMES.map(x => <option key={x} value={x}>{x}</option>)}
+                    </select>
+                  </div>
+
+                  {dup && (
+                    <div style={{marginTop:8,paddingTop:8,borderTop:"1px solid #fecaca"}}>
+                      <div style={{fontSize:12,color:"#991b1b",fontWeight:600,marginBottom:6}}>
+                        Ya tiene una tarjeta cargada en {rn}.
+                      </div>
+                      <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
+                        {libres.map(x => (
+                          <button key={x} onClick={()=>{ setPlayerRound(pr => ({...pr,[pid]:x})); if (setOverwriteOk) setOverwriteOk(o=>({...o,[pid]:false})); }}
+                            style={{...S.btn,...S.btnP,fontSize:12,padding:"7px 13px"}}>
+                            ↪ Mover a {x}
+                          </button>
+                        ))}
+                        {libres.length === 0 && (
+                          <span style={{fontSize:12,color:"#7f1d1d",fontWeight:600}}>Sin Adicionales libres (máx. 2 al año)</span>
+                        )}
+                        {bloquea && setOverwriteOk && (
+                          <label style={{display:"flex",alignItems:"center",gap:6,fontSize:12,color:"#7f1d1d",cursor:"pointer"}}>
+                            <input type="checkbox" checked={!!overwriteOk[pid]} style={{width:18,height:18,cursor:"pointer"}}
+                              onChange={e=>setOverwriteOk(o=>({...o,[pid]:e.target.checked}))} />
+                            Sobrescribir
+                          </label>
+                        )}
+                      </div>
+                      {!bloquea && (
+                        <div style={{fontSize:11,color:"#7f1d1d",marginTop:6}}>
+                          Si no lo cambias, el admin lo resolverá al ingresar los scores.
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          {conExcepcion.length > 0 && (
+            <div style={{marginTop:12,padding:"10px 14px",backgroundColor:"#f0f7f0",borderRadius:8,fontSize:12,color:"#1a472a"}}>
+              Esta tarjeta se guardará en <b>{new Set(selected.map(roundOf)).size} rondas distintas</b>.
+            </div>
+          )}
+        </div>
+      )}
+    </>
+  );
+}
+
 function ManualEntry({players, allRounds, yearRounds, saveRounds, nav, pending, removePendingRequest, photoIndex}) {
-  const [meta, setMeta] = useState({date: new Date().toISOString().split("T")[0], name: ""});
-  const [selected, setSelected] = useState([]);          // playerIds en la tarjeta, en orden
-  const [grid, setGrid] = useState({});                  // { [playerId]: string[18] }
+  const [step, setStep] = useState(1);
+  const [date, setDate] = useState(new Date().toISOString().split("T")[0]);
+  const [count, setCount] = useState(null);              // cuántos compitieron en Grosspi
+  const [selected, setSelected] = useState([]);          // playerIds, en orden
+  const [baseRound, setBaseRound] = useState("");        // ronda del grupo
+  const [playerRound, setPlayerRound] = useState({});    // excepciones { pid: ronda }
+  const [grid, setGrid] = useState({});                  // { pid: string[18] }
+  const [overwriteOk, setOverwriteOk] = useState({});
   const [photo, setPhoto] = useState(null);
-  const [overwriteOk, setOverwriteOk] = useState({});    // { [playerId]: true } sobrescritura confirmada
-  const [playerRound, setPlayerRound] = useState({});   // { [playerId]: nombreRonda } — excepciones; el resto hereda meta.name
-  const [saved, setSaved] = useState(null);              // texto de confirmación
+  const [saved, setSaved] = useState(null);
   const [saving, setSaving] = useState(false);
   const [previewReq, setPreviewReq] = useState(null);
   const [lightboxSrc, setLightboxSrc] = useState(null);
   const [activeReqId, setActiveReqId] = useState(null);
 
   const emptyScores = () => Array(18).fill("");
+  const nameOf = (pid) => players.find(p => p.id === pid)?.name || pid;
+
+  const reset = () => {
+    setStep(1); setCount(null); setSelected([]); setBaseRound(""); setPlayerRound({});
+    setGrid({}); setOverwriteOk({}); setPhoto(null); setActiveReqId(null);
+  };
 
   const togglePlayer = (pid) => {
     setSelected(prev => {
@@ -2234,16 +2481,20 @@ function ManualEntry({players, allRounds, yearRounds, saveRounds, nav, pending, 
   };
 
   const approveRequest = (req) => {
-    // Pre-llena la tarjeta pero NO saca la solicitud de pendientes hasta guardar
-    setMeta({ date: req.date, name: req.roundName });
+    // Pre-llena desde la solicitud y salta al paso de rondas, donde se resuelven duplicados.
+    // La solicitud NO sale de pendientes hasta que se guarde.
     const pids = (req.playerIds && req.playerIds.length) ? req.playerIds : [req.playerId];
+    setDate(req.date);
+    setCount(pids.length);
     setSelected(pids);
+    setBaseRound(req.roundName || "");
+    setPlayerRound({});
     setGrid(Object.fromEntries(pids.map(pid => [pid, emptyScores()])));
     setOverwriteOk({});
-    setPlayerRound({});
     setPhoto(req.photo);
     setActiveReqId(req.id);
     setPreviewReq(null);
+    setStep(3);
     window.scrollTo(0, 0);
   };
 
@@ -2254,70 +2505,42 @@ function ManualEntry({players, allRounds, yearRounds, saveRounds, nav, pending, 
     if (activeReqId === req.id) { setActiveReqId(null); setPhoto(null); }
   };
 
-  // Jugadores ya cargados por ronda (del año en curso)
-  const roundPlayerCounts = useMemo(() => {
-    const counts = {};
-    yearRounds.forEach(r => { if (r.scores) counts[r.name] = Object.keys(r.scores).length; });
-    return counts;
-  }, [yearRounds]);
-
-  const currentRound = useMemo(() => yearRounds.find(r => r.name === meta.name), [yearRounds, meta.name]);
-  const playersInRound = useMemo(() => currentRound?.scores ? Object.keys(currentRound.scores) : [], [currentRound]);
-
   // ===== RONDA POR JUGADOR =====
-  // Una misma tarjeta puede alimentar rondas distintas: para dos jugadores es la
-  // T8 y para el tercero, que ya jugó la T8, es su Adicional. Cada jugador hereda
-  // la ronda de la tarjeta salvo que se le asigne una excepción.
-  const roundOf = useCallback((pid) => playerRound[pid] || meta.name, [playerRound, meta.name]);
+  // Una misma tarjeta puede alimentar rondas distintas: para dos es la T8 y para
+  // el tercero, que ya jugó la T8, es su Adicional.
+  const roundOf = useCallback((pid) => playerRound[pid] || baseRound, [playerRound, baseRound]);
 
   const playersOfRound = useCallback((rn) => {
     const r = yearRounds.find(x => x.name === rn);
     return r?.scores ? Object.keys(r.scores) : [];
   }, [yearRounds]);
 
-  // ===== DETECCIÓN DE DUPLICADOS =====
-  // (a) el jugador ya tiene tarjeta en LA RONDA QUE LE TOCA → sobrescribiría sus datos
   const dupInRound = useMemo(
-    () => selected.filter(pid => playersOfRound(roundOf(pid)).includes(pid)),
+    () => selected.filter(pid => roundOf(pid) && playersOfRound(roundOf(pid)).includes(pid)),
     [selected, roundOf, playersOfRound]
   );
 
-  // (b) el jugador ya tiene una tarjeta cargada con esta MISMA fecha en otra ronda
-  const dupSameDate = useMemo(() => {
-    if (!meta.date) return [];
-    return selected.filter(pid => allRounds.some(r =>
-      r.name !== roundOf(pid) &&
-      r.scores?.[pid] &&
-      ((r.scores_log?.[pid]?.playedAt || r.date) === meta.date)
-    ));
-  }, [selected, allRounds, meta.date, roundOf]);
-
-  // Slots "Adicional" libres para UN jugador puntual
   const freeAdicionalFor = useCallback(
     (pid) => ROUND_NAMES.filter(rn => rn.startsWith("Adicional") && !playersOfRound(rn).includes(pid)),
     [playersOfRound]
   );
 
-  // Cuántas rondas distintas va a escribir esta tarjeta
   const roundsToWrite = useMemo(() => {
     const m = {};
-    selected.forEach(pid => { const rn = roundOf(pid); (m[rn] = m[rn] || []).push(pid); });
+    selected.forEach(pid => { const rn = roundOf(pid); if (rn) (m[rn] = m[rn] || []).push(pid); });
     return m;
   }, [selected, roundOf]);
 
   const blockingDupes = dupInRound.filter(pid => !overwriteOk[pid]);
-  const nameOf = (pid) => players.find(p => p.id === pid)?.name || pid;
+  const yaCargadosEnBase = useMemo(() => baseRound ? playersOfRound(baseRound) : [], [baseRound, playersOfRound]);
 
   const handlePhoto = async f => {
     if (!f?.type?.startsWith("image/")) return;
-    const compressed = await compressPhoto(f);
-    setPhoto(compressed);
+    setPhoto(await compressPhoto(f));
   };
 
-  // Jugadores con al menos un score ingresado
   const filledPlayers = selected.filter(pid => (grid[pid] || []).some(v => v !== "" && parseInt(v) > 0));
-
-  const canSave = !!meta.name && !!meta.date && filledPlayers.length > 0 && blockingDupes.length === 0 && !saving;
+  const canSave = filledPlayers.length > 0 && blockingDupes.length === 0 && !saving;
 
   const save = async () => {
     if (!canSave) return;
@@ -2325,18 +2548,14 @@ function ManualEntry({players, allRounds, yearRounds, saveRounds, nav, pending, 
     try {
       const loadedAt = new Date().toISOString();
       const source = activeReqId ? "pending" : "admin";
-      const yr = new Date(meta.date + "T12:00:00").getFullYear();
+      const yr = new Date(date + "T12:00:00").getFullYear();
 
-      // Agrupar por la ronda que le toca a cada jugador: una misma tarjeta puede
-      // escribir en más de una ronda (p.ej. dos en T8 y uno en Adicional 1)
+      // Agrupar por la ronda que le toca a cada jugador
       const grupos = {};
-      filledPlayers.forEach(pid => {
-        const rn = roundOf(pid);
-        (grupos[rn] = grupos[rn] || []).push(pid);
-      });
+      filledPlayers.forEach(pid => { const rn = roundOf(pid); (grupos[rn] = grupos[rn] || []).push(pid); });
 
       let updatedRounds = [...allRounds];
-      const destinos = []; // [{roundId, pids}] para asociar la foto después
+      const destinos = [];
       const stamp = Date.now();
       let nuevaIdx = 0;
 
@@ -2344,9 +2563,8 @@ function ManualEntry({players, allRounds, yearRounds, saveRounds, nav, pending, 
         const newScores = {}, newLogs = {};
         pids.forEach(pid => {
           newScores[pid] = (grid[pid] || emptyScores()).map(v => parseInt(v) || 0);
-          newLogs[pid] = { playedAt: meta.date, loadedAt, source };
+          newLogs[pid] = { playedAt: date, loadedAt, source };
         });
-
         const existente = updatedRounds.find(r => r.name === rn && roundYear(r) === yr);
         if (existente) {
           // No se pisa la fecha de la ronda: la fecha individual va en scores_log[pid].playedAt
@@ -2357,77 +2575,82 @@ function ManualEntry({players, allRounds, yearRounds, saveRounds, nav, pending, 
           } : r);
           destinos.push({ roundId: existente.id, pids });
         } else {
-          // Sin truncar el nombre y con contador: dos rondas nuevas en un mismo
-          // guardado (Adicional 1 y Adicional 2) no pueden compartir id
+          // Contador + nombre completo: dos rondas nuevas en un mismo guardado no colisionan
           const roundId = "r" + stamp + "-" + (++nuevaIdx) + "-" + rn.replace(/[^A-Za-z0-9]/g, "");
-          updatedRounds = [...updatedRounds, {
-            id: roundId, name: rn, date: meta.date,
-            scores: newScores, scores_log: newLogs,
-          }];
+          updatedRounds = [...updatedRounds, { id: roundId, name: rn, date, scores: newScores, scores_log: newLogs }];
           destinos.push({ roundId, pids });
         }
       });
 
       await saveRounds(updatedRounds);
 
-      // La foto de la tarjeta se asocia a cada ronda destino, con los jugadores que van en ella
       if (photo) {
         const photoForDB = await compressPhotoForDB(photo);
         for (const d of destinos) await fbSaveCardPhoto(d.roundId, d.pids, photoForDB);
       }
 
-      if (activeReqId) { await removePendingRequest(activeReqId); setActiveReqId(null); }
+      if (activeReqId) await removePendingRequest(activeReqId);
 
-      const nRondas = Object.keys(grupos).length;
-      const detalle = nRondas > 1
+      const nR = Object.keys(grupos).length;
+      const detalle = nR > 1
         ? Object.entries(grupos).map(([rn, pids]) => `${pids.length} en ${rn}`).join(" y ")
         : `en ${Object.keys(grupos)[0]}`;
       setSaved(`${filledPlayers.length} jugador${filledPlayers.length > 1 ? "es" : ""} guardado${filledPlayers.length > 1 ? "s" : ""} ${detalle}`);
-      setTimeout(() => setSaved(null), 4000);
-      setSelected([]); setGrid({}); setOverwriteOk({}); setPlayerRound({}); setPhoto(null);
+      setTimeout(() => setSaved(null), 4500);
+      reset();
     } finally {
       setSaving(false);
     }
   };
 
-  const colTotal = (pid) => (grid[pid] || []).reduce((sum, v) => sum + (parseInt(v) || 0), 0);
-  const colGross = (pid) => (grid[pid] || []).reduce((sum, v, i) => sum + stablefordGross(parseInt(v) || 0, COURSE.pars[i]), 0);
-  const colVsPar = (pid) => (grid[pid] || []).reduce((sum, v, i) => sum + (v ? (parseInt(v) - COURSE.pars[i]) : 0), 0);
+  const colTotal = (pid) => (grid[pid] || []).reduce((s, v) => s + (parseInt(v) || 0), 0);
+  const colGross = (pid) => (grid[pid] || []).reduce((s, v, i) => s + stablefordGross(parseInt(v) || 0, COURSE.pars[i]), 0);
+  const colVsPar = (pid) => (grid[pid] || []).reduce((s, v, i) => s + (v ? (parseInt(v) - COURSE.pars[i]) : 0), 0);
+
+  const PASOS = ["Cuántos jugaron", "Quiénes jugaron", "Qué ronda", "Scores y foto"];
 
   return (
     <div style={S.view}>
       {lightboxSrc && (
         <div onClick={()=>setLightboxSrc(null)}
           style={{position:"fixed",inset:0,backgroundColor:"rgba(0,0,0,0.92)",zIndex:2000,display:"flex",alignItems:"center",justifyContent:"center",padding:16,cursor:"zoom-out"}}>
-          <img src={lightboxSrc} alt="Tarjeta" style={{maxWidth:"100%",maxHeight:"92vh",borderRadius:8,boxShadow:"0 8px 40px rgba(0,0,0,0.6)"}} />
-          <button onClick={()=>setLightboxSrc(null)} style={{position:"absolute",top:16,right:20,background:"none",border:"none",color:"#fff",fontSize:28,cursor:"pointer",lineHeight:1}}>✕</button>
+          <img src={lightboxSrc} alt="Tarjeta" style={{maxWidth:"100%",maxHeight:"92vh",borderRadius:8}} />
+          <button onClick={()=>setLightboxSrc(null)} style={{position:"absolute",top:16,right:20,background:"none",border:"none",color:"#fff",fontSize:28,cursor:"pointer"}}>✕</button>
         </div>
       )}
 
       <div style={S.hdr}>
         <h1 style={S.title}>Cargar Ronda</h1>
-        <p style={S.sub}>Selecciona todos los jugadores de la tarjeta e ingresa sus scores de una vez</p>
+        <p style={S.sub}>Paso a paso: cuántos compitieron, quiénes, qué ronda y los scores</p>
       </div>
 
-      {/* Solicitudes pendientes */}
-      {pending.length > 0 && (
+      {saved && (
+        <div style={{backgroundColor:"#f0fdf4",border:"1px solid #86efac",borderRadius:10,padding:"12px 16px",marginBottom:16,textAlign:"center"}}>
+          <span style={{color:"#065f46",fontWeight:600}}>✅ {saved}</span>
+        </div>
+      )}
+
+      {/* Solicitudes pendientes — solo al inicio */}
+      {step === 1 && pending.length > 0 && (
         <div style={{...S.card,borderLeft:"4px solid #ef4444",marginBottom:20}}>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,flexWrap:"wrap",gap:8}}>
             <h2 style={{...S.cardTitle,margin:0,color:"#dc2626"}}>📬 Solicitudes Pendientes ({pending.length})</h2>
-            <span style={{fontSize:11,color:"#6b7280"}}>Toca una para ver la foto y cargar la ronda</span>
+            <span style={{fontSize:11,color:"#6b7280"}}>Toca una para ver la foto</span>
           </div>
           <div style={{display:"flex",flexDirection:"column",gap:8}}>
             {pending.map(req => (
-              <div key={req.id} style={{
-                padding:"12px 14px",borderRadius:8,border: activeReqId===req.id ? "2px solid #1a472a" : "1px solid #fca5a5",
-                backgroundColor: activeReqId===req.id ? "#f0f7f0" : previewReq?.id===req.id?"#fef2f2":"#fff", cursor:"pointer"
-              }} onClick={()=>setPreviewReq(previewReq?.id===req.id?null:req)}>
+              <div key={req.id} style={{padding:"12px 14px",borderRadius:8,border:"1px solid #fca5a5",
+                backgroundColor: previewReq?.id===req.id ? "#fef2f2" : "#fff", cursor:"pointer"}}
+                onClick={()=>setPreviewReq(previewReq?.id===req.id?null:req)}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
                   <div>
-                    {activeReqId===req.id && <span style={{fontSize:10,padding:"1px 7px",borderRadius:8,backgroundColor:"#1a472a",color:"#fff",fontWeight:700,marginRight:6}}>✏️ En curso</span>}
-                    <span style={{fontWeight:700,color:"#1a472a",fontSize:14}}>{(req.playerIds && req.playerIds.length > 1) ? "👥 " : ""}{req.playerNames || req.playerName}</span>
+                    <span style={{fontWeight:700,color:"#1a472a",fontSize:14}}>
+                      {(req.playerIds && req.playerIds.length > 1) ? "👥 " : ""}{req.playerNames || req.playerName}
+                    </span>
                     <span style={{color:"#6b7280",fontSize:12,marginLeft:8}}>{req.roundName}</span>
-                    <span style={{color:"#9ca3af",fontSize:11,marginLeft:8}}>{req.date ? new Date(req.date).toLocaleDateString("es-CL",{day:"numeric",month:"short"}) : ""}</span>
+                    <span style={{color:"#9ca3af",fontSize:11,marginLeft:8}}>
+                      {req.date ? new Date(req.date+"T12:00:00").toLocaleDateString("es-CL",{day:"numeric",month:"short"}) : ""}
+                    </span>
                   </div>
                   <div style={{display:"flex",gap:6}}>
                     <button onClick={e=>{e.stopPropagation();approveRequest(req);}}
@@ -2448,267 +2671,146 @@ function ManualEntry({players, allRounds, yearRounds, saveRounds, nav, pending, 
         </div>
       )}
 
-      {saved && (
-        <div style={{backgroundColor:"#f0fdf4",border:"1px solid #86efac",borderRadius:10,padding:"12px 16px",marginBottom:16,textAlign:"center"}}>
-          <span style={{color:"#065f46",fontWeight:600}}>✅ {saved}</span>
+      <Stepper labels={PASOS} current={step} onGoTo={setStep} />
+
+      {activeReqId && (
+        <div style={{padding:"9px 14px",backgroundColor:"#f0f7f0",border:"1px solid #86efac",borderRadius:8,marginBottom:14,fontSize:12,color:"#1a472a"}}>
+          ✏️ Cargando desde una solicitud de jugador · la foto ya viene adjunta
         </div>
       )}
 
-      {/* Ronda + fecha */}
-      <div style={S.card}>
-        <h2 style={S.cardTitle}>Datos de la Ronda</h2>
-        <div style={{display:"flex",gap:12,flexWrap:"wrap",marginBottom:16}}>
-          <div style={{flex:1,minWidth:200}}>
-            <label style={S.label}>Ronda</label>
-            <select style={S.input} value={meta.name} onChange={e=>setMeta({...meta,name:e.target.value})}>
-              <option value="">Seleccionar ronda...</option>
-              {ROUND_NAMES.map(rn => {
-                const count = roundPlayerCounts[rn] || 0;
-                return <option key={rn} value={rn}>{rn}{count > 0 ? ` (${count} jugadores)` : ""}</option>;
-              })}
-            </select>
-          </div>
-          <div style={{flex:1,minWidth:160}}>
-            <label style={S.label}>Fecha</label>
-            <input style={S.input} type="date" value={meta.date} onChange={e=>setMeta({...meta,date:e.target.value})} />
-          </div>
-        </div>
-
-        {meta.name && playersInRound.length > 0 && (
-          <div style={{padding:"10px 14px",backgroundColor:"#f0f7f0",borderRadius:8,fontSize:12}}>
-            <span style={{fontWeight:600,color:"#1a472a"}}>Ya cargados en {meta.name}:</span>{" "}
-            {playersInRound.map(pid => nameOf(pid)).join(", ")}
-          </div>
-        )}
-      </div>
-
-      {/* Selección de jugadores */}
-      <div style={S.card}>
-        <h2 style={S.cardTitle}>Jugadores de la tarjeta {selected.length > 0 && <span style={{color:"#4a6741",fontWeight:600,fontSize:13}}>· {selected.length} seleccionado{selected.length>1?"s":""}</span>}</h2>
-        <p style={{...S.sub,marginTop:0,marginBottom:10,fontSize:12}}>Toca los jugadores que comparten esta tarjeta. Se cargan todos juntos.</p>
-        <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
-          {players.map(p => {
-            const isSel = selected.includes(p.id);
-            const already = playersInRound.includes(p.id);
-            return (
-              <button key={p.id} onClick={()=>togglePlayer(p.id)}
-                style={{
-                  padding:"7px 12px",borderRadius:16,fontSize:12,cursor:"pointer",minHeight:36,
-                  fontWeight: isSel ? 700 : 500,
-                  border: isSel ? "2px solid #1a472a" : already ? "1px solid #fbbf24" : "1px solid #d1d5db",
-                  backgroundColor: isSel ? "#1a472a" : already ? "#fffbeb" : "#fff",
-                  color: isSel ? "#fff" : already ? "#92400e" : "#374151",
-                }}>
-                {isSel ? "✓ " : ""}{p.name}{already ? " ⚠️" : ""}
-              </button>
-            );
-          })}
-        </div>
-        {meta.name && playersInRound.length > 0 && (
-          <div style={{fontSize:11,color:"#92400e",marginTop:10}}>⚠️ = ya tiene tarjeta cargada en {meta.name}</div>
-        )}
-      </div>
-
-      {/* WARNING DE DUPLICADOS — se resuelve jugador por jugador */}
-      {dupInRound.length > 0 && (
-        <div style={{...S.card,borderLeft:"4px solid #dc2626",backgroundColor:"#fef2f2"}}>
-          <h2 style={{...S.cardTitle,color:"#991b1b"}}>
-            ⚠️ {dupInRound.length === 1 ? "Jugador duplicado" : `${dupInRound.length} jugadores duplicados`}
-          </h2>
-          <p style={{fontSize:13,color:"#7f1d1d",marginTop:0}}>
-            Ya {dupInRound.length === 1 ? "tiene" : "tienen"} tarjeta cargada en la ronda que les toca.
-            Resuelve cada uno por separado: si para ese jugador esta fecha es adicional, muévelo a un
-            <b> Adicional</b> — el resto de la tarjeta se queda donde está.
-          </p>
-
-          {dupInRound.map(pid => {
-            const libres = freeAdicionalFor(pid);
-            return (
-              <div key={pid} style={{borderTop:"1px solid #fecaca",paddingTop:10,marginTop:10}}>
-                <div style={{fontWeight:700,color:"#991b1b",fontSize:14,marginBottom:6}}>
-                  {nameOf(pid)} <span style={{fontWeight:500,color:"#7f1d1d",fontSize:12}}>· ya cargado en {roundOf(pid)}</span>
-                </div>
-                <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
-                  {libres.map(rn => (
-                    <button key={rn}
-                      onClick={()=>{ setPlayerRound(pr => ({...pr, [pid]: rn})); setOverwriteOk(o => ({...o, [pid]: false})); }}
-                      style={{...S.btn,...S.btnP,fontSize:12,padding:"8px 14px"}}>
-                      ↪ Mover a {rn}
-                    </button>
-                  ))}
-                  {libres.length === 0 && (
-                    <span style={{fontSize:12,color:"#7f1d1d",fontWeight:600}}>
-                      Sin Adicionales libres (máx. 2 al año)
-                    </span>
-                  )}
-                  <label style={{display:"flex",alignItems:"center",gap:6,fontSize:12,color:"#7f1d1d",cursor:"pointer"}}>
-                    <input type="checkbox" checked={!!overwriteOk[pid]} style={{width:18,height:18,cursor:"pointer"}}
-                      onChange={e=>setOverwriteOk(o => ({...o, [pid]: e.target.checked}))} />
-                    Sobrescribir (se pierde el score anterior)
-                  </label>
-                </div>
-              </div>
-            );
-          })}
-        </div>
+      {/* ---- PASO 1 ---- */}
+      {step === 1 && (
+        <>
+          <StepCantidad date={date} setDate={setDate} count={count} setCount={setCount} />
+          <StepNav onNext={()=>setStep(2)} nextDisabled={!count || !date} />
+        </>
       )}
 
-      {/* Resumen cuando la tarjeta se divide en varias rondas */}
-      {Object.keys(roundsToWrite).length > 1 && (
-        <div style={{...S.card,borderLeft:"4px solid #4a6741",backgroundColor:"#f0f7f0"}}>
-          <div style={{fontSize:13,color:"#1a472a"}}>
-            <b>Esta tarjeta se guardará en {Object.keys(roundsToWrite).length} rondas:</b>
-            <ul style={{margin:"6px 0 0",paddingLeft:20}}>
-              {Object.entries(roundsToWrite).map(([rn, pids]) => (
-                <li key={rn} style={{marginBottom:2}}>
-                  <b>{rn}</b>: {pids.map(nameOf).join(", ")}
-                </li>
-              ))}
-            </ul>
-          </div>
-        </div>
+      {/* ---- PASO 2 ---- */}
+      {step === 2 && (
+        <>
+          <StepJugadores players={players} count={count} selected={selected} onToggle={togglePlayer} yaCargadosEn={[]} />
+          <StepNav onBack={()=>setStep(1)} onNext={()=>setStep(3)} nextDisabled={selected.length !== count}
+            aviso={selected.length > 0 && selected.length !== count ? `Faltan ${count - selected.length} de ${count} jugadores` : null} />
+        </>
       )}
 
-      {/* Aviso secundario: misma fecha en otra ronda */}
-      {dupSameDate.length > 0 && (
-        <div style={{...S.card,borderLeft:"4px solid #f59e0b",backgroundColor:"#fffbeb"}}>
-          <div style={{fontSize:13,color:"#92400e"}}>
-            📅 <b>{dupSameDate.map(nameOf).join(", ")}</b> ya {dupSameDate.length===1?"tiene":"tienen"} una tarjeta cargada con fecha {new Date(meta.date+"T12:00:00").toLocaleDateString("es-CL",{day:"numeric",month:"long"})} en otra ronda. Verifica que la fecha sea correcta.
-          </div>
-        </div>
+      {/* ---- PASO 3 ---- */}
+      {step === 3 && (
+        <>
+          <StepRondas
+            players={players} selected={selected}
+            baseRound={baseRound} setBaseRound={setBaseRound}
+            playerRound={playerRound} setPlayerRound={setPlayerRound}
+            roundOf={roundOf} playersOfRound={playersOfRound} freeAdicionalFor={freeAdicionalFor}
+            dupes={dupInRound} overwriteOk={overwriteOk} setOverwriteOk={setOverwriteOk} bloquea
+          />
+          <StepNav onBack={()=>setStep(2)} onNext={()=>setStep(4)}
+            nextDisabled={!baseRound || blockingDupes.length > 0}
+            nextLabel="Ingresar scores →"
+            aviso={blockingDupes.length > 0
+              ? `🔒 Resuelve el duplicado de ${blockingDupes.map(nameOf).join(", ")} — muévelo a un Adicional o marca sobrescribir`
+              : null} />
+        </>
       )}
 
-      {/* GRILLA TIPO TARJETA */}
-      {selected.length > 0 && (
-        <div style={S.card}>
-          <h2 style={S.cardTitle}>Scores — 18 Hoyos</h2>
-          <div style={{overflowX:"auto",WebkitOverflowScrolling:"touch"}}>
-            <table style={{borderCollapse:"separate",borderSpacing:0,width:"100%",minWidth: 120 + selected.length*112}}>
-              <thead>
-                <tr>
-                  <th style={{position:"sticky",left:0,zIndex:2,backgroundColor:"#f9fafb",padding:"8px 6px",fontSize:11,fontWeight:700,color:"#6b7280",textAlign:"left",borderBottom:"2px solid #e5e7eb",minWidth:64}}>Hoyo</th>
-                  <th style={{padding:"8px 4px",fontSize:11,fontWeight:700,color:"#6b7280",borderBottom:"2px solid #e5e7eb",minWidth:34}}>Par</th>
-                  {selected.map(pid => {
-                    const excepcion = !!playerRound[pid] && playerRound[pid] !== meta.name;
-                    const duplicado = dupInRound.includes(pid);
-                    return (
-                    <th key={pid} style={{padding:"8px 4px",fontSize:11,fontWeight:700,color:"#1a472a",borderBottom:"2px solid #e5e7eb",minWidth:104,maxWidth:120,
-                      backgroundColor: duplicado ? "#fef2f2" : excepcion ? "#fffbeb" : "transparent"}}>
-                      <div style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={nameOf(pid)}>
-                        {nameOf(pid).split(" ")[0]}
-                      </div>
-                      <div style={{fontSize:10,color:"#9ca3af",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
-                        {nameOf(pid).split(" ").slice(1).join(" ")}
-                      </div>
-                      {/* Ronda de ESTE jugador — hereda la de la tarjeta salvo excepción */}
-                      <select
-                        value={roundOf(pid)}
-                        title="Ronda a la que va el score de este jugador"
-                        onChange={e => setPlayerRound(pr => {
-                          if (e.target.value === meta.name) { const {[pid]:_, ...rest} = pr; return rest; }
-                          return {...pr, [pid]: e.target.value};
-                        })}
-                        style={{width:"100%",marginTop:3,fontSize:10,padding:"3px 2px",borderRadius:5,cursor:"pointer",
-                          border: duplicado ? "1px solid #dc2626" : excepcion ? "1px solid #f59e0b" : "1px solid #d1d5db",
-                          backgroundColor: duplicado ? "#fee2e2" : excepcion ? "#fef3c7" : "#fff",
-                          color: duplicado ? "#991b1b" : excepcion ? "#92400e" : "#6b7280",
-                          fontWeight: (duplicado || excepcion) ? 700 : 500}}
-                      >
-                        {ROUND_NAMES.map(rn => <option key={rn} value={rn}>{rn}</option>)}
-                      </select>
-                      <button onClick={()=>togglePlayer(pid)} style={{marginTop:2,border:"none",background:"none",color:"#dc2626",fontSize:11,cursor:"pointer",padding:0}}>✕ quitar</button>
-                    </th>
-                    );
-                  })}
-                </tr>
-              </thead>
-              <tbody>
-                {Array.from({length:18},(_,h) => (
-                  <tr key={h} style={h===8?{borderBottom:"2px solid #d1d5db"}:{}}>
-                    <td style={{position:"sticky",left:0,zIndex:1,backgroundColor:"#fff",padding:"3px 6px",fontSize:12,fontWeight:700,color:"#374151",borderBottom:"1px solid #f3f4f6"}}>
-                      H{h+1}
-                    </td>
-                    <td style={{padding:"3px 4px",fontSize:11,color:"#9ca3af",textAlign:"center",borderBottom:"1px solid #f3f4f6"}}>{COURSE.pars[h]}</td>
-                    {selected.map(pid => (
-                      <td key={pid} style={{padding:"3px 3px",borderBottom:"1px solid #f3f4f6"}}>
-                        <input
-                          type="number" inputMode="numeric" min="1" max="15"
-                          value={(grid[pid] || [])[h] || ""}
-                          onChange={e=>setCell(pid, h, e.target.value)}
-                          placeholder="-"
-                          style={{width:"100%",boxSizing:"border-box",padding:"8px 2px",textAlign:"center",fontSize:16,fontWeight:700,
-                            border:"1px solid #d1d5db",borderRadius:6,minHeight:40,
-                            color: (grid[pid]||[])[h] ? scoreColor(parseInt((grid[pid]||[])[h]), COURSE.pars[h]) : "#9ca3af"}}
-                        />
-                      </td>
-                    ))}
+      {/* ---- PASO 4 ---- */}
+      {step === 4 && (
+        <>
+          <div style={S.card}>
+            <h2 style={S.cardTitle}>Scores — 18 Hoyos</h2>
+            <div style={{overflowX:"auto",WebkitOverflowScrolling:"touch"}}>
+              <table style={{borderCollapse:"separate",borderSpacing:0,width:"100%",minWidth: 120 + selected.length*100}}>
+                <thead>
+                  <tr>
+                    <th style={{position:"sticky",left:0,zIndex:2,backgroundColor:"#f9fafb",padding:"8px 6px",fontSize:11,fontWeight:700,color:"#6b7280",textAlign:"left",borderBottom:"2px solid #e5e7eb",minWidth:64}}>Hoyo</th>
+                    <th style={{padding:"8px 4px",fontSize:11,fontWeight:700,color:"#6b7280",borderBottom:"2px solid #e5e7eb",minWidth:34}}>Par</th>
+                    {selected.map(pid => {
+                      const exc = roundOf(pid) !== baseRound;
+                      return (
+                        <th key={pid} style={{padding:"8px 4px",fontSize:11,fontWeight:700,color:"#1a472a",borderBottom:"2px solid #e5e7eb",minWidth:92,maxWidth:110,
+                          backgroundColor: exc ? "#fffbeb" : "transparent"}}>
+                          <div style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={nameOf(pid)}>{nameOf(pid).split(" ")[0]}</div>
+                          <div style={{fontSize:10,color:"#9ca3af",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{nameOf(pid).split(" ").slice(1).join(" ")}</div>
+                          <div style={{marginTop:3,fontSize:9,fontWeight:700,padding:"2px 4px",borderRadius:4,
+                            backgroundColor: exc ? "#fef3c7" : "#f3f4f6", color: exc ? "#92400e" : "#6b7280",
+                            overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={roundOf(pid)}>
+                            {roundOf(pid)}
+                          </div>
+                        </th>
+                      );
+                    })}
                   </tr>
-                ))}
-                <tr style={{backgroundColor:"#f9fafb"}}>
-                  <td style={{position:"sticky",left:0,zIndex:1,backgroundColor:"#f9fafb",padding:"8px 6px",fontSize:12,fontWeight:700,color:"#374151"}}>Golpes</td>
-                  <td style={{padding:"8px 4px",fontSize:12,fontWeight:700,color:"#6b7280",textAlign:"center"}}>{PAR_TOTAL}</td>
-                  {selected.map(pid => <td key={pid} style={{padding:"8px 4px",textAlign:"center",fontSize:15,fontWeight:700,color:"#1a472a"}}>{colTotal(pid) || "-"}</td>)}
-                </tr>
-                <tr style={{backgroundColor:"#f9fafb"}}>
-                  <td style={{position:"sticky",left:0,zIndex:1,backgroundColor:"#f9fafb",padding:"6px 6px",fontSize:11,color:"#6b7280"}}>vs Par</td>
-                  <td />
-                  {selected.map(pid => {
-                    const v = colVsPar(pid);
-                    return <td key={pid} style={{padding:"6px 4px",textAlign:"center",fontSize:12,fontWeight:700,color: v > 0 ? "#ef4444" : "#22c55e"}}>{v > 0 ? "+" : ""}{v}</td>;
-                  })}
-                </tr>
-                <tr style={{backgroundColor:"#f9fafb"}}>
-                  <td style={{position:"sticky",left:0,zIndex:1,backgroundColor:"#f9fafb",padding:"6px 6px",fontSize:11,color:"#6b7280"}}>Gross</td>
-                  <td />
-                  {selected.map(pid => <td key={pid} style={{padding:"6px 4px",textAlign:"center",fontSize:12,fontWeight:700,color:"#4a6741"}}>{colGross(pid)} pts</td>)}
-                </tr>
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {Array.from({length:18},(_,h) => (
+                    <tr key={h} style={h===8?{borderBottom:"2px solid #d1d5db"}:{}}>
+                      <td style={{position:"sticky",left:0,zIndex:1,backgroundColor:"#fff",padding:"3px 6px",fontSize:12,fontWeight:700,color:"#374151",borderBottom:"1px solid #f3f4f6"}}>H{h+1}</td>
+                      <td style={{padding:"3px 4px",fontSize:11,color:"#9ca3af",textAlign:"center",borderBottom:"1px solid #f3f4f6"}}>{COURSE.pars[h]}</td>
+                      {selected.map(pid => (
+                        <td key={pid} style={{padding:"3px 3px",borderBottom:"1px solid #f3f4f6"}}>
+                          <input type="number" inputMode="numeric" min="1" max="15"
+                            value={(grid[pid] || [])[h] || ""}
+                            onChange={e=>setCell(pid, h, e.target.value)}
+                            placeholder="-"
+                            style={{width:"100%",boxSizing:"border-box",padding:"8px 2px",textAlign:"center",fontSize:16,fontWeight:700,
+                              border:"1px solid #d1d5db",borderRadius:6,minHeight:40,
+                              color: (grid[pid]||[])[h] ? scoreColor(parseInt((grid[pid]||[])[h]), COURSE.pars[h]) : "#9ca3af"}} />
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                  <tr style={{backgroundColor:"#f9fafb"}}>
+                    <td style={{position:"sticky",left:0,zIndex:1,backgroundColor:"#f9fafb",padding:"8px 6px",fontSize:12,fontWeight:700,color:"#374151"}}>Golpes</td>
+                    <td style={{padding:"8px 4px",fontSize:12,fontWeight:700,color:"#6b7280",textAlign:"center"}}>{PAR_TOTAL}</td>
+                    {selected.map(pid => <td key={pid} style={{padding:"8px 4px",textAlign:"center",fontSize:15,fontWeight:700,color:"#1a472a"}}>{colTotal(pid) || "-"}</td>)}
+                  </tr>
+                  <tr style={{backgroundColor:"#f9fafb"}}>
+                    <td style={{position:"sticky",left:0,zIndex:1,backgroundColor:"#f9fafb",padding:"6px",fontSize:11,color:"#6b7280"}}>vs Par</td><td />
+                    {selected.map(pid => { const v = colVsPar(pid);
+                      return <td key={pid} style={{padding:"6px 4px",textAlign:"center",fontSize:12,fontWeight:700,color: v>0?"#ef4444":"#22c55e"}}>{v>0?"+":""}{v}</td>; })}
+                  </tr>
+                  <tr style={{backgroundColor:"#f9fafb"}}>
+                    <td style={{position:"sticky",left:0,zIndex:1,backgroundColor:"#f9fafb",padding:"6px",fontSize:11,color:"#6b7280"}}>Gross</td><td />
+                    {selected.map(pid => <td key={pid} style={{padding:"6px 4px",textAlign:"center",fontSize:12,fontWeight:700,color:"#4a6741"}}>{colGross(pid)} pts</td>)}
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div style={{fontSize:11,color:"#9ca3af",marginTop:8}}>💡 En el celular desliza la tabla hacia el lado para ver todas las columnas</div>
           </div>
-          <div style={{fontSize:11,color:"#9ca3af",marginTop:8}}>💡 En el celular puedes deslizar la tabla hacia el lado para ver todas las columnas</div>
-        </div>
-      )}
 
-      {/* Foto de respaldo */}
-      <div style={S.card}>
-        <h2 style={S.cardTitle}>📷 Foto de Respaldo (opcional)</h2>
-        {selected.length > 1 && <p style={{fontSize:12,color:"#6b7280",marginTop:0}}>Una sola foto queda asociada a los {selected.length} jugadores de la tarjeta.</p>}
-        {photo ? (
-          <div style={{textAlign:"center"}}>
-            <img src={photo} alt="Tarjeta" onClick={()=>setLightboxSrc(photo)}
-              style={{maxWidth:"100%",maxHeight:240,borderRadius:10,border:"1px solid #e5e7eb",cursor:"zoom-in"}} />
-            <div style={{fontSize:11,color:"#9ca3af",marginTop:4}}>🔍 Toca para ver en grande</div>
-            <button style={{...S.btn,...S.btnS,marginTop:8,fontSize:12,padding:"8px 16px"}} onClick={()=>setPhoto(null)}>✕ Quitar foto</button>
+          <div style={S.card}>
+            <h2 style={S.cardTitle}>📷 Foto de Respaldo (opcional)</h2>
+            {selected.length > 1 && <p style={{fontSize:12,color:"#6b7280",marginTop:0}}>Una sola foto queda asociada a los {selected.length} jugadores.</p>}
+            {photo ? (
+              <div style={{textAlign:"center"}}>
+                <img src={photo} alt="Tarjeta" onClick={()=>setLightboxSrc(photo)}
+                  style={{maxWidth:"100%",maxHeight:240,borderRadius:10,border:"1px solid #e5e7eb",cursor:"zoom-in"}} />
+                <button style={{...S.btn,...S.btnS,marginTop:8,fontSize:12,padding:"8px 16px"}} onClick={()=>setPhoto(null)}>✕ Quitar foto</button>
+              </div>
+            ) : (
+              <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+                <label style={{flex:1,minWidth:130,display:"flex",flexDirection:"column",alignItems:"center",gap:6,padding:"18px 12px",borderRadius:10,border:"2px dashed #86efac",backgroundColor:"#f0fdf4",cursor:"pointer"}}>
+                  <span style={{fontSize:28}}>📷</span><span style={{fontSize:12,fontWeight:600,color:"#1a472a"}}>Sacar foto</span>
+                  <input type="file" accept="image/*" capture="environment" style={{display:"none"}} onChange={e=>handlePhoto(e.target.files[0])} />
+                </label>
+                <label style={{flex:1,minWidth:130,display:"flex",flexDirection:"column",alignItems:"center",gap:6,padding:"18px 12px",borderRadius:10,border:"2px dashed #d1d5db",backgroundColor:"#f9fafb",cursor:"pointer"}}>
+                  <span style={{fontSize:28}}>🖼️</span><span style={{fontSize:12,fontWeight:600,color:"#374151"}}>Galería</span>
+                  <input type="file" accept="image/*" style={{display:"none"}} onChange={e=>handlePhoto(e.target.files[0])} />
+                </label>
+              </div>
+            )}
           </div>
-        ) : (
-          <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
-            <label style={{flex:1,minWidth:130,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:6,padding:"18px 12px",borderRadius:10,border:"2px dashed #86efac",backgroundColor:"#f0fdf4",cursor:"pointer",textAlign:"center"}}>
-              <span style={{fontSize:28}}>📷</span>
-              <span style={{fontSize:12,fontWeight:600,color:"#1a472a"}}>Sacar foto</span>
-              <input type="file" accept="image/*" capture="environment" style={{display:"none"}} onChange={e=>handlePhoto(e.target.files[0])} />
-            </label>
-            <label style={{flex:1,minWidth:130,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:6,padding:"18px 12px",borderRadius:10,border:"2px dashed #d1d5db",backgroundColor:"#f9fafb",cursor:"pointer",textAlign:"center"}}>
-              <span style={{fontSize:28}}>🖼️</span>
-              <span style={{fontSize:12,fontWeight:600,color:"#374151"}}>Galería</span>
-              <input type="file" accept="image/*" style={{display:"none"}} onChange={e=>handlePhoto(e.target.files[0])} />
-            </label>
-          </div>
-        )}
-      </div>
 
-      {/* Guardar */}
-      {blockingDupes.length > 0 && (
-        <div style={{backgroundColor:"#fef2f2",border:"1px solid #fca5a5",borderRadius:10,padding:"12px 16px",marginBottom:12,textAlign:"center",fontSize:13,color:"#991b1b",fontWeight:600}}>
-          🔒 Guardado bloqueado: resuelve el duplicado de {blockingDupes.map(nameOf).join(", ")} — muévelo a un Adicional o marca sobrescribir
-        </div>
+          <StepNav onBack={()=>setStep(3)} onNext={save} nextDisabled={!canSave}
+            nextLabel={saving ? "Guardando..."
+              : Object.keys(roundsToWrite).length > 1 ? `Guardar ${filledPlayers.length} jugadores en ${Object.keys(roundsToWrite).length} rondas`
+              : filledPlayers.length > 1 ? `Guardar ${filledPlayers.length} jugadores` : "Guardar Score"}
+            aviso={filledPlayers.length === 0 ? "Ingresa al menos un score para guardar" : null} />
+        </>
       )}
-      <button style={{...S.btn,...S.btnP,width:"100%",padding:"14px 24px",fontSize:15,opacity: canSave ? 1 : 0.4}}
-        onClick={save} disabled={!canSave}>
-        {saving ? "Guardando..."
-          : Object.keys(roundsToWrite).length > 1 ? `Guardar ${filledPlayers.length} jugadores en ${Object.keys(roundsToWrite).length} rondas`
-          : filledPlayers.length > 1 ? `Guardar ${filledPlayers.length} jugadores`
-          : "Guardar Score"}
-      </button>
     </div>
   );
 }
