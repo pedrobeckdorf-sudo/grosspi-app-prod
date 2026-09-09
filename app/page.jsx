@@ -121,6 +121,15 @@ function tiebreaker(a, b) {
 }
 
 // Compute ranking score: sum all if <7 rounds played, best 7 if >=7
+// Conjunto de rondas que efectivamente suman (mejores n).
+// No se puede decidir por valor: con un empate en el puntaje del corte,
+// includes() marca como contadas a las dos rondas y no se descarta ninguna.
+function bestLabels(byMonth, n = 7) {
+  const entries = Object.entries(byMonth || {});
+  if (entries.length <= n) return new Set(entries.map(([k]) => k));
+  return new Set(entries.sort((a, b) => b[1] - a[1]).slice(0, n).map(([k]) => k));
+}
+
 function rankingScore(netVals) {
   const sorted = [...netVals].sort((a,b) => b-a);
   if (netVals.length < 7) {
@@ -480,6 +489,8 @@ function computeRankingsFromRounds(players, yearRounds, yearNum, hcpData) {
       tarjetas,
       best7Net,
       best7Gross,
+      best7NetLabels: bestLabels(netByMonth),
+      best7GrossLabels: bestLabels(grossByMonth),
       avgNet: best7Net.length > 0 ? totalNet7 / best7Net.length : 0,
       avgGross: best7Gross.length > 0 ? totalGross7 / best7Gross.length : 0,
       netByMonth,
@@ -686,6 +697,8 @@ export default function App() {
           tarjetas: a?.numTarjetas || 0,
           best7Net,
           best7Gross,
+          best7NetLabels: bestLabels(a?.netPts || {}),
+          best7GrossLabels: bestLabels(a?.grossPts || {}),
           avgNet: best7Net.length > 0 ? totalNet7 / best7Net.length : 0,
           avgGross: best7Gross.length > 0 ? totalGross7 / best7Gross.length : 0,
           netByMonth: a?.netPts || {},
@@ -872,7 +885,7 @@ function Dashboard({rankings, rounds, nav, annual, players, year, hcp2026, isAdm
                   <td style={S.td}>{p.tarjetas}</td>
                   {colMonths.map(m => {
                     const val = p.netByMonth?.[m];
-                    const isBest7 = val && p.best7Net.includes(val);
+                    const isBest7 = val && (p.best7NetLabels ? p.best7NetLabels.has(m) : p.best7Net.includes(val));
                     return <td key={m} style={{...S.td,fontSize:11,color:val?(isBest7?"#1a472a":"#9ca3af"):"#e5e7eb",fontWeight:isBest7?700:400,backgroundColor:isBest7?"#f0f7f0":"transparent"}}>{val||"-"}</td>;
                   })}
                   <td style={{...S.td,fontWeight:800,color:"#1a472a",fontSize:15,borderLeft:"2px solid #d1d5db"}}>{p.totalNet}</td>
@@ -1465,6 +1478,12 @@ function HcpEvolutionCard({ history, handicap }) {
 
 // ======== ROUND HISTORY CARD (proper component — useState here, not in IIFE) ========
 function RoundHistoryCard({ roundHistory, rounds, pid, p, year, players, hcp2026 }) {
+  // Por id de ronda: unico, asi que un empate de puntaje no confunde el descarte
+  const bestRids = useMemo(() => {
+    const arr = roundHistory.map(rh => ({ rid: rh.rid, v: rh.netPts }));
+    if (arr.length <= 7) return new Set(arr.map(x => x.rid));
+    return new Set(arr.sort((a, b) => b.v - a.v).slice(0, 7).map(x => x.rid));
+  }, [roundHistory]);
   const [openRound, setOpenRound] = useState(null);
   return (
     <div style={S.card}>
@@ -1478,7 +1497,7 @@ function RoundHistoryCard({ roundHistory, rounds, pid, p, year, players, hcp2026
           netPts: stablefordNet(s,COURSE.pars[i],hcp,COURSE.handicapIndex[i])
         }));
         const isOpen = openRound === rh.rid;
-        const isBest = p.best7Net.includes(rh.netPts);
+        const isBest = bestRids.has(rh.rid);
         return (
           <div key={rh.rid} style={{borderBottom:"1px solid #f3f4f6"}}>
             <div style={{display:"flex",alignItems:"center",padding:"10px 4px",cursor:"pointer",gap:8}}
@@ -1674,7 +1693,7 @@ function PlayerDetail({pid, rankings, rounds, allRounds, nav, year, hcp2026, pla
             const g = p.grossByMonth[m];
             const n = p.netByMonth[m];
             if (!s && !g && !n) return null;
-            const isBest = n && p.best7Net.includes(n);
+            const isBest = n && (p.best7NetLabels ? p.best7NetLabels.has(m) : p.best7Net.includes(n));
             return (
               <tr key={m} style={{...S.tr, backgroundColor: isBest ? "#f0f7f0" : "transparent"}}>
                 <td style={{...S.td,textAlign:"left",fontWeight:500}}>{m} {isBest ? "⭐" : ""}</td>
@@ -2204,7 +2223,7 @@ const ROUND_NAMES = [
 // Pasos: 1) cuántos compitieron  2) quiénes  3) qué ronda cada uno  4) scores/foto
 // Se separó en pasos porque el selector múltiple libre confundía a los jugadores.
 
-const MAX_TARJETA = 8;
+const MAX_TARJETA = 4;   // maximo de jugadores por ronda
 
 // La tarjeta adjunta acompaña los pasos 2, 3 y 4: el admin lee de la foto para
 // decidir quiénes jugaron, qué ronda le toca a cada uno y transcribir los scores.
